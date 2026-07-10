@@ -1,7 +1,7 @@
-# Binaries
+# Binaries / build output
 /0type
 /0type.exe
-/build/
+/build/bin/
 /bin/
 /dist/
 
@@ -15,9 +15,11 @@
 *.out
 /vendor/
 
-# Wails frontend
+# Wails frontend (generated / installed)
 /frontend/node_modules/
-/frontend/dist/
+/frontend/dist/*
+!/frontend/dist/.gitkeep
+/frontend/wailsjs/
 
 # OS / editor
 .DS_Store
