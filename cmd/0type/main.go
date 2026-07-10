@@ -66,7 +66,7 @@ func (p *pipeline) process(pcm []byte) {
 func main() {
 	p := &pipeline{
 		rec:   audio.NewStub(),
-		asr:   transcribe.NewStub(),
+		asr:   transcribe.Default(),
 		clean: cleanup.NewNoop(),
 		inj:   inject.Default(),
 	}

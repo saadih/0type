@@ -7,7 +7,8 @@ package audio
 // Recorder captures microphone audio between Start and Stop.
 type Recorder interface {
 	Start() error
-	// Stop ends capture and returns 16 kHz mono 16-bit PCM.
+	// Stop ends capture and returns a complete WAV file (16 kHz mono 16-bit PCM
+	// in a RIFF container) — the format transcribers accept.
 	Stop() ([]byte, error)
 }
 
