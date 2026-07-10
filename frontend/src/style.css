@@ -6,6 +6,7 @@
   --muted: #8a8a95;
   --accent: #6ee7b7;
   --accent-press: #34d399;
+  --rec: #f87171;
 }
 
 * { box-sizing: border-box; }
@@ -21,9 +22,33 @@ body {
 #app { display: flex; flex-direction: column; height: 100vh; }
 
 header { padding: 22px 24px 14px; }
+.titlebar { display: flex; align-items: flex-start; justify-content: space-between; }
 .wordmark { font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
 .wordmark span { color: var(--muted); font-weight: 500; }
 .tagline { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+.rec {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rec);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.rec.active { opacity: 1; }
+.rec .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rec);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
 
 main {
   flex: 1;

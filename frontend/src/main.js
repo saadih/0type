@@ -1,10 +1,16 @@
 import './style.css';
 import { GetSettings, SaveSettings } from '../wailsjs/go/main/App';
+import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
   <header>
-    <div class="wordmark">0<span>type</span></div>
-    <div class="tagline">zero typing — hold, talk, done</div>
+    <div class="titlebar">
+      <div>
+        <div class="wordmark">0<span>type</span></div>
+        <div class="tagline">no typing allowed</div>
+      </div>
+      <div class="rec" id="rec"><span class="dot"></span>Recording</div>
+    </div>
   </header>
   <main>
     <label class="field">
@@ -72,10 +78,15 @@ $('save').addEventListener('click', async () => {
   };
   try {
     await SaveSettings(s);
-    flash('Saved ✓');
+    flash('Saved ✓ — restart 0type to apply key/URL changes');
   } catch (e) {
     flash('Error: ' + e, false);
   }
+});
+
+// The engine emits a "recording" event on every press/release; light up the dot.
+EventsOn('recording', (recording) => {
+  $('rec').classList.toggle('active', !!recording);
 });
 
 load();

@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/saadih/0type/internal/app"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Settings is the user-facing configuration edited in the window and persisted
@@ -28,6 +31,7 @@ type App struct {
 	mu       sync.Mutex
 	settings Settings
 	path     string
+	engine   *app.Engine
 }
 
 // NewApp creates the app with defaults and the config-file path resolved.
@@ -35,10 +39,24 @@ func NewApp() *App {
 	return &App{settings: defaultSettings(), path: configPath()}
 }
 
-// startup runs when the window is ready; load any saved settings.
+// startup runs when the window is ready: load settings, then start the engine.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.load()
+	a.startEngine()
+}
+
+// startEngine builds the dictation engine from the saved settings and starts it.
+// The onState callback drives the window's recording indicator over a Wails event.
+func (a *App) startEngine() {
+	s := a.GetSettings()
+	a.engine = app.New(app.Config{
+		GroqAPIKey: s.GroqAPIKey,
+		CleanupURL: s.CleanupURL,
+	}, func(recording bool) {
+		runtime.EventsEmit(a.ctx, "recording", recording)
+	})
+	a.engine.Start()
 }
 
 // GetSettings returns the current settings (the frontend calls this on load).
@@ -48,7 +66,8 @@ func (a *App) GetSettings() Settings {
 	return a.settings
 }
 
-// SaveSettings persists the settings edited in the window.
+// SaveSettings persists the settings edited in the window. Transcription/cleanup
+// changes apply on the next launch.
 func (a *App) SaveSettings(s Settings) error {
 	a.mu.Lock()
 	a.settings = s
