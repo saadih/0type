@@ -3,6 +3,7 @@
 package inject
 
 import (
+	"fmt"
 	"syscall"
 	"time"
 	"unsafe"
@@ -46,13 +47,18 @@ const _ = uint(40 - unsafe.Sizeof(input{}))
 // ClipboardPaster injects text by writing it to the clipboard and sending
 // Ctrl+V, then restoring the previous clipboard. This is faster and far more
 // Unicode-safe (Swedish å/ä/ö, emoji) than simulating each keystroke.
+//
+// Inject must be driven from a single goroutine (0type's output worker): the
+// clipboard is a shared global and the save/set/paste/restore sequence is not
+// atomic, so concurrent callers would clobber each other. Non-text clipboard
+// contents (images/files) can't be preserved and are best-effort only.
 type ClipboardPaster struct{}
 
 // NewClipboardPaster returns a clipboard-paste injector.
 func NewClipboardPaster() *ClipboardPaster { return &ClipboardPaster{} }
 
 // Inject sets the clipboard to text, pastes it into the focused app, then
-// restores whatever was on the clipboard before.
+// restores whatever text was on the clipboard before.
 func (c *ClipboardPaster) Inject(text string) error {
 	prev, _ := clipboard.ReadAll() // best effort; empty if the clipboard isn't text
 	if err := clipboard.WriteAll(text); err != nil {
@@ -92,7 +98,11 @@ func sendCtrlV() error {
 		unsafe.Sizeof(events[0]),
 	)
 	if int(n) != len(events) {
-		return err
+		// A partial batch can leave Ctrl held; force it up so the modifier
+		// doesn't stick for the user's next real keystroke.
+		up := keyEvent(vkControl, true)
+		procSendInput.Call(1, uintptr(unsafe.Pointer(&up)), unsafe.Sizeof(up))
+		return fmt.Errorf("sendinput injected %d of %d events: %w", n, len(events), err)
 	}
 	return nil
 }

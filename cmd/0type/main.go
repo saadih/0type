@@ -2,7 +2,8 @@
 // transcribed + cleaned text is pasted into whatever app has focus.
 //
 // Console MVP. Trigger, audio capture, transcription (Groq when GROQ_API_KEY is
-// set), and injection are all real; cleanup is still a pass-through stub.
+// set), cleanup (a local LLM when ZEROTYPE_CLEANUP_URL is set), and injection
+// are all real.
 package main
 
 import (
@@ -16,22 +17,42 @@ import (
 	"github.com/saadih/0type/internal/transcribe"
 )
 
+// minRecordingBytes ignores fat-finger taps: below ~0.15s of 16 kHz mono 16-bit
+// audio there is no speech, only a wasted transcription round-trip.
+const minRecordingBytes = 44 + 16000*2*15/100
+
 type pipeline struct {
 	rec    audio.Recorder
 	asr    transcribe.Transcriber
 	clean  cleanup.Cleaner
 	inj    inject.Injector
-	events chan bool // true = press (start recording), false = release (stop)
+	events chan bool   // hook thread -> run(): true = press, false = release
+	jobs   chan []byte // run() -> processLoop(): one finished recording
 }
 
-// onPress/onRelease run on the hook thread, so they only signal the worker —
-// opening an audio device or making a network call here would lag the whole
-// system's mouse (and Windows may drop a slow low-level hook).
-func (p *pipeline) onPress()   { p.events <- true }
-func (p *pipeline) onRelease() { p.events <- false }
+// onPress/onRelease run on the WH_MOUSE_LL callback thread, so they must never
+// block — a low-level hook that stalls freezes the whole system's mouse and can
+// be dropped by Windows. signal drops the event rather than block.
+func (p *pipeline) onPress()   { p.signal(true) }
+func (p *pipeline) onRelease() { p.signal(false) }
 
-// run serializes recording start/stop off the hook thread, then hands each
-// finished recording to its own transcription goroutine.
+func (p *pipeline) signal(press bool) {
+	select {
+	case p.events <- press:
+	default:
+		log.Printf("hotkey: event queue full, dropped a %s", pressLabel(press))
+	}
+}
+
+func pressLabel(press bool) string {
+	if press {
+		return "press"
+	}
+	return "release"
+}
+
+// run serializes recording start/stop off the hook thread and forwards each
+// finished recording to the single ordered output worker.
 func (p *pipeline) run() {
 	for press := range p.events {
 		if press {
@@ -46,11 +67,22 @@ func (p *pipeline) run() {
 			log.Printf("record stop: %v", err)
 			continue
 		}
-		go p.process(wav)
+		if len(wav) < minRecordingBytes {
+			continue // too short to be speech — ignore the tap
+		}
+		p.jobs <- wav
 	}
 }
 
-// process runs a finished recording through transcribe -> clean -> inject.
+// processLoop is the single output worker: it transcribes, cleans, and injects
+// one recording at a time, in submission order. Serializing injection here is
+// what stops overlapping dictations from corrupting the shared clipboard.
+func (p *pipeline) processLoop() {
+	for wav := range p.jobs {
+		p.process(wav)
+	}
+}
+
 func (p *pipeline) process(wav []byte) {
 	raw, err := p.asr.Transcribe(wav)
 	if err != nil {
@@ -63,7 +95,10 @@ func (p *pipeline) process(wav []byte) {
 		text = raw // fall back to the raw transcript rather than dropping it
 	}
 	if text == "" {
-		return // nothing recognized (e.g. silence) — don't paste an empty string
+		if raw != "" {
+			log.Printf("cleanup returned empty; nothing pasted (if unexpected, start the cleanup server with --jinja)")
+		}
+		return // nothing to paste (silence, or a filler-only utterance)
 	}
 	if err := p.inj.Inject(text); err != nil {
 		log.Printf("inject: %v", err)
@@ -77,8 +112,10 @@ func main() {
 		clean:  cleanup.Default(),
 		inj:    inject.Default(),
 		events: make(chan bool, 16),
+		jobs:   make(chan []byte, 8),
 	}
 	go p.run()
+	go p.processLoop()
 	go p.clean.Clean("warm up") // prime the cleanup model's prompt cache in the background
 
 	trigger := hotkey.Default()

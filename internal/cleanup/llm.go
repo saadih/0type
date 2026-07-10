@@ -16,7 +16,7 @@ import (
 var systemPrompt string
 
 // thinkTag strips Qwen's <think>...</think> reasoning blocks, in case the model
-// emits them despite the /no_think directive.
+// emits them despite enable_thinking:false.
 var thinkTag = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 // LLM cleans transcripts via a local OpenAI-compatible chat endpoint (llama.cpp's
@@ -29,10 +29,13 @@ type LLM struct {
 }
 
 // NewLLM returns a cleaner pointing at an OpenAI-compatible base URL, e.g.
-// http://127.0.0.1:8719 (llama-server) — no trailing /v1.
+// http://127.0.0.1:8719 (llama-server). A trailing /v1 is tolerated.
 func NewLLM(baseURL string) *LLM {
+	base := strings.TrimRight(baseURL, "/")
+	base = strings.TrimSuffix(base, "/v1") // tolerate a trailing /v1 in the configured URL
+	base = strings.TrimRight(base, "/")
 	return &LLM{
-		BaseURL: strings.TrimRight(baseURL, "/"),
+		BaseURL: base,
 		Model:   "local", // llama-server serves whatever single model it loaded
 		Client:  &http.Client{Timeout: 60 * time.Second},
 	}
@@ -45,6 +48,10 @@ type chatMessage struct {
 
 // Clean sends the raw transcript through the model and returns the cleaned text.
 func (l *LLM) Clean(raw string) (string, error) {
+	// Defense in depth: a spoken "</transcript>" must not let dictated text
+	// break out of the delimiter and pose as instructions.
+	raw = strings.ReplaceAll(raw, "</transcript>", "")
+
 	payload := map[string]any{
 		"model": l.Model,
 		"messages": []chatMessage{
@@ -90,6 +97,13 @@ func (l *LLM) Clean(raw string) (string, error) {
 	if len(out.Choices) == 0 {
 		return "", fmt.Errorf("cleanup: empty response")
 	}
+
 	text := thinkTag.ReplaceAllString(out.Choices[0].Message.Content, "")
+	// A truncated (max_tokens) or non-jinja response can leave an unclosed
+	// <think> the regex can't match; drop from any opener so raw reasoning is
+	// never pasted.
+	if i := strings.Index(text, "<think>"); i >= 0 {
+		text = text[:i]
+	}
 	return strings.TrimSpace(text), nil
 }
