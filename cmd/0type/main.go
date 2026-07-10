@@ -1,11 +1,9 @@
 // Command 0type is a push-to-talk dictation tool: hold a button, speak, and the
 // transcribed + cleaned text is pasted into whatever app has focus.
 //
-// This is the MVP skeleton. Every stage is an interface (see internal/*), wired
-// together here. The default implementations are stubs, so the pipeline runs
-// end-to-end with no native dependencies yet — press Enter to simulate a
-// dictation. Swap the stubs for the real robotgo / sherpa-onnx / Ollama impls
-// one at a time, starting from inject and working backwards.
+// This is the console MVP. The trigger is real (hold the mouse back button on
+// Windows — see internal/hotkey); the record/transcribe/cleanup/inject stages
+// are still stubs, swapped in one at a time behind their interfaces.
 package main
 
 import (
@@ -27,21 +25,29 @@ type pipeline struct {
 	inj   inject.Injector
 }
 
-// onPress starts capturing the microphone.
+// onPress starts capturing the microphone. It runs on the hook thread, so it
+// must stay fast.
 func (p *pipeline) onPress() {
+	fmt.Println("[listening] hold to speak, release to dictate...")
 	if err := p.rec.Start(); err != nil {
 		log.Printf("record start: %v", err)
 	}
 }
 
-// onRelease stops capture and runs the recording through the pipeline:
-// transcribe -> clean -> inject.
+// onRelease stops capture and hands the audio off to a worker goroutine. The
+// heavy work (transcribe/clean/inject) must not run on the hook thread — a slow
+// low-level hook callback lags the whole system's mouse.
 func (p *pipeline) onRelease() {
 	pcm, err := p.rec.Stop()
 	if err != nil {
 		log.Printf("record stop: %v", err)
 		return
 	}
+	go p.process(pcm)
+}
+
+// process runs the recorded audio through transcribe -> clean -> inject.
+func (p *pipeline) process(pcm []byte) {
 	raw, err := p.asr.Transcribe(pcm)
 	if err != nil {
 		log.Printf("transcribe: %v", err)
@@ -65,8 +71,9 @@ func main() {
 		inj:   inject.NewStub(),
 	}
 
-	trigger := hotkey.NewStdinStub() // TODO: replace with the robotgo global hook
-	fmt.Println("0type (skeleton) — press Enter to simulate a dictation, Ctrl+C to quit.")
+	trigger := hotkey.Default()
+	fmt.Println("0type - hold the mouse back button (MB4) and speak; release to dictate. Ctrl+C to quit.")
+	fmt.Println("(console MVP - audio and transcription are still stubbed)")
 	if err := trigger.Start(p.onPress, p.onRelease); err != nil {
 		log.Fatal(err)
 	}

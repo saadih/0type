@@ -22,6 +22,6 @@ func NewStub() *Stub { return &Stub{} }
 
 // Inject writes the text to stdout.
 func (s *Stub) Inject(text string) error {
-	fmt.Printf("→ %s\n", text)
+	fmt.Printf("> %s\n", text)
 	return nil
 }
