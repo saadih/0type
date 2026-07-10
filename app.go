@@ -8,20 +8,21 @@ import (
 	"sync"
 
 	"github.com/saadih/0type/internal/app"
+	"github.com/saadih/0type/internal/hotkey"
 )
 
 // Settings is the user-facing configuration edited in the window and persisted
 // to the OS config dir (%APPDATA%\0type\config.json on Windows).
 type Settings struct {
-	Trigger    string `json:"trigger"`    // e.g. "MouseBack"
-	Mode       string `json:"mode"`       // "hold" | "toggle"
-	Language   string `json:"language"`   // "auto" | "en" | "sv"
-	GroqAPIKey string `json:"groqApiKey"` // cloud transcription (optional)
-	CleanupURL string `json:"cleanupUrl"` // local LLM base URL (optional)
+	Trigger    hotkey.Binding `json:"trigger"`
+	Mode       string         `json:"mode"`       // "hold" | "toggle"
+	Language   string         `json:"language"`   // "auto" | "en" | "sv"
+	GroqAPIKey string         `json:"groqApiKey"` // cloud transcription (optional)
+	CleanupURL string         `json:"cleanupUrl"` // local LLM base URL (optional)
 }
 
 func defaultSettings() Settings {
-	return Settings{Trigger: "MouseBack", Mode: "hold", Language: "auto"}
+	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold", Language: "auto"}
 }
 
 // App is the Wails backend bound to the frontend.
@@ -46,15 +47,15 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // startEngine builds the dictation engine from the saved settings and starts it.
-// The recording indicator is a floating overlay driven by the engine itself, so
-// the GUI passes no per-state callback.
+// The recording indicator is a floating overlay driven by the engine itself.
 func (a *App) startEngine() {
 	s := a.GetSettings()
 	a.engine = app.New(app.Config{
 		GroqAPIKey: s.GroqAPIKey,
 		CleanupURL: s.CleanupURL,
+		Binding:    s.Trigger,
 	}, nil)
-	a.engine.Start()
+	_ = a.engine.Start()
 }
 
 // GetSettings returns the current settings (the frontend calls this on load).
@@ -65,12 +66,29 @@ func (a *App) GetSettings() Settings {
 }
 
 // SaveSettings persists the settings edited in the window. Transcription/cleanup
-// changes apply on the next launch.
+// changes apply on the next launch; the trigger applies live via CaptureBinding.
 func (a *App) SaveSettings(s Settings) error {
 	a.mu.Lock()
 	a.settings = s
 	a.mu.Unlock()
 	return a.save()
+}
+
+// CaptureBinding waits for the user to press any key or mouse side/middle button,
+// applies it as the trigger live, persists it, and returns the new binding.
+func (a *App) CaptureBinding() (hotkey.Binding, error) {
+	if a.engine == nil {
+		return hotkey.Binding{}, nil
+	}
+	b, err := a.engine.Rebind()
+	if err != nil {
+		return b, err
+	}
+	a.mu.Lock()
+	a.settings.Trigger = b
+	a.mu.Unlock()
+	_ = a.save()
+	return b, nil
 }
 
 func configPath() string {
@@ -98,7 +116,9 @@ func (a *App) save() error {
 	if err := os.MkdirAll(filepath.Dir(a.path), 0o755); err != nil {
 		return err
 	}
+	a.mu.Lock()
 	b, err := json.MarshalIndent(a.settings, "", "  ")
+	a.mu.Unlock()
 	if err != nil {
 		return err
 	}

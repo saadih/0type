@@ -2,6 +2,5 @@
 
 package hotkey
 
-// Default returns the platform push-to-talk trigger: the mouse back button (MB4)
-// on Windows.
-func Default() Trigger { return NewMouseHook() }
+// New returns the Windows push-to-talk controller for the given binding.
+func New(b Binding) Controller { return newController(b) }

@@ -18,10 +18,11 @@ import (
 // audio there is no speech, only a wasted transcription round-trip.
 const minRecordingBytes = 44 + 16000*2*15/100
 
-// Config selects the transcription and cleanup backends.
+// Config selects the backends and the initial trigger binding.
 type Config struct {
 	GroqAPIKey string // cloud transcription; empty -> stub transcript
 	CleanupURL string // local LLM base URL; empty -> pass-through
+	Binding    hotkey.Binding
 }
 
 // Engine wires the dictation pipeline together and runs it.
@@ -30,7 +31,7 @@ type Engine struct {
 	asr     transcribe.Transcriber
 	clean   cleanup.Cleaner
 	inj     inject.Injector
-	trig    hotkey.Trigger
+	trig    hotkey.Controller
 	onState func(recording bool)
 	events  chan bool
 	jobs    chan []byte
@@ -51,12 +52,16 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 	if onState == nil {
 		onState = func(bool) {}
 	}
+	b := cfg.Binding
+	if !b.Valid() {
+		b = hotkey.DefaultBinding()
+	}
 	return &Engine{
 		rec:     audio.Default(),
 		asr:     asr,
 		clean:   clean,
 		inj:     inject.Default(),
-		trig:    hotkey.Default(),
+		trig:    hotkey.New(b),
 		onState: onState,
 		events:  make(chan bool, 16),
 		jobs:    make(chan []byte, 8),
@@ -64,17 +69,24 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 }
 
 // Start launches the engine's goroutines, the floating overlay, and the global
-// trigger. It returns immediately; the trigger runs on its own goroutine.
-func (e *Engine) Start() {
+// trigger. It returns after the trigger's hooks are installed (or an error).
+func (e *Engine) Start() error {
 	overlay.Start()
 	go e.run()
 	go e.processLoop()
 	go func() { _, _ = e.clean.Clean("warm up") }() // prime the cleanup prompt cache
-	go func() {
-		if err := e.trig.Start(e.onPress, e.onRelease); err != nil {
-			log.Printf("hotkey: %v", err)
-		}
-	}()
+	return e.trig.Start(e.onPress, e.onRelease)
+}
+
+// Rebind captures the next key/button the user presses, applies it live, and
+// returns the new binding.
+func (e *Engine) Rebind() (hotkey.Binding, error) {
+	b, err := e.trig.Capture()
+	if err != nil {
+		return b, err
+	}
+	e.trig.SetBinding(b)
+	return b, nil
 }
 
 func (e *Engine) onPress()   { e.signal(true) }

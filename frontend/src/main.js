@@ -1,5 +1,5 @@
 import './style.css';
-import { GetSettings, SaveSettings } from '../wailsjs/go/main/App';
+import { GetSettings, SaveSettings, CaptureBinding } from '../wailsjs/go/main/App';
 
 document.querySelector('#app').innerHTML = `
   <header>
@@ -10,8 +10,8 @@ document.querySelector('#app').innerHTML = `
     <label class="field">
       <span>Trigger</span>
       <div class="trigger-row">
-        <code id="trigger">MouseBack</code>
-        <button id="rebind" class="ghost" disabled>Rebind (soon)</button>
+        <code id="trigger">Mouse Back</code>
+        <button id="rebind" class="ghost">Rebind</button>
       </div>
     </label>
     <label class="field">
@@ -46,9 +46,12 @@ document.querySelector('#app').innerHTML = `
 
 const $ = (id) => document.getElementById(id);
 
+let binding = { kind: 'mouse', code: 4, name: 'Mouse Back' };
+
 async function load() {
   const s = await GetSettings();
-  $('trigger').textContent = s.trigger || 'MouseBack';
+  if (s.trigger && s.trigger.kind) binding = s.trigger;
+  $('trigger').textContent = binding.name || 'Mouse Back';
   $('mode').value = s.mode || 'hold';
   $('language').value = s.language || 'auto';
   $('groq').value = s.groqApiKey || '';
@@ -62,9 +65,32 @@ function flash(msg, ok = true) {
   setTimeout(() => { el.textContent = ''; }, 2600);
 }
 
+$('rebind').addEventListener('click', async () => {
+  const rebind = $('rebind');
+  const prev = $('trigger').textContent;
+  $('trigger').textContent = 'Press any key or button…';
+  rebind.disabled = true;
+  try {
+    // CaptureBinding blocks until you press something, then applies + saves it.
+    const b = await CaptureBinding();
+    if (b && b.kind) {
+      binding = b;
+      $('trigger').textContent = b.name;
+      flash('Bound to ' + b.name);
+    } else {
+      $('trigger').textContent = prev;
+    }
+  } catch (e) {
+    $('trigger').textContent = prev;
+    flash('Rebind failed: ' + e, false);
+  } finally {
+    rebind.disabled = false;
+  }
+});
+
 $('save').addEventListener('click', async () => {
   const s = {
-    trigger: $('trigger').textContent,
+    trigger: binding,
     mode: $('mode').value,
     language: $('language').value,
     groqApiKey: $('groq').value,

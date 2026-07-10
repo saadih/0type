@@ -2,7 +2,11 @@
 
 package hotkey
 
-// Default returns the platform push-to-talk trigger. Off Windows the real global
-// hook isn't wired up yet, so this falls back to the terminal stub (press Enter
-// to simulate a dictation).
-func Default() Trigger { return NewStdinStub() }
+// New returns a no-op controller off Windows (the global hook is Windows-only).
+func New(b Binding) Controller { return noopController{} }
+
+type noopController struct{}
+
+func (noopController) Start(onPress, onRelease func()) error { return nil }
+func (noopController) SetBinding(b Binding)                  {}
+func (noopController) Capture() (Binding, error)             { return Binding{}, nil }

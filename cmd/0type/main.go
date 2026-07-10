@@ -10,12 +10,14 @@ import (
 	"os/signal"
 
 	"github.com/saadih/0type/internal/app"
+	"github.com/saadih/0type/internal/hotkey"
 )
 
 func main() {
 	engine := app.New(app.Config{
 		GroqAPIKey: os.Getenv("GROQ_API_KEY"),
 		CleanupURL: os.Getenv("ZEROTYPE_CLEANUP_URL"),
+		Binding:    hotkey.DefaultBinding(),
 	}, func(recording bool) {
 		if recording {
 			fmt.Println("[listening] hold to speak, release to dictate...")
@@ -24,7 +26,10 @@ func main() {
 
 	fmt.Println("0type - focus a text field, hold the mouse back button (MB4), speak, release. Ctrl+C to quit.")
 	fmt.Println("(set GROQ_API_KEY for real transcription; without it a stub transcript is used)")
-	engine.Start()
+	if err := engine.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "hotkey:", err)
+		os.Exit(1)
+	}
 
 	// Block until Ctrl+C; the engine runs on its own goroutines.
 	sig := make(chan os.Signal, 1)
