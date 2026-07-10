@@ -68,12 +68,12 @@ func main() {
 		rec:   audio.NewStub(),
 		asr:   transcribe.NewStub(),
 		clean: cleanup.NewNoop(),
-		inj:   inject.NewStub(),
+		inj:   inject.Default(),
 	}
 
 	trigger := hotkey.Default()
-	fmt.Println("0type - hold the mouse back button (MB4) and speak; release to dictate. Ctrl+C to quit.")
-	fmt.Println("(console MVP - audio and transcription are still stubbed)")
+	fmt.Println("0type - focus a text field, hold the mouse back button (MB4), speak, release. Ctrl+C to quit.")
+	fmt.Println("(console MVP - audio + transcription still stubbed; the stub transcript is pasted at your cursor)")
 	if err := trigger.Start(p.onPress, p.onRelease); err != nil {
 		log.Fatal(err)
 	}
