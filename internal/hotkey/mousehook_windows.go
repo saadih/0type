@@ -13,9 +13,6 @@ const (
 	wmXButtonDown = 0x020B
 	wmXButtonUp   = 0x020C
 	wmQuit        = 0x0012
-
-	vkXButton1 = 0x05 // "back" side button (MB4) — the default trigger
-	keyDownBit = 0x8000
 )
 
 var (
@@ -27,26 +24,26 @@ var (
 	procUnhookWindowsHook  = user32.NewProc("UnhookWindowsHookEx")
 	procGetMessage         = user32.NewProc("GetMessageW")
 	procPostThreadMessage  = user32.NewProc("PostThreadMessageW")
-	procGetAsyncKeyState   = user32.NewProc("GetAsyncKeyState")
 	procGetModuleHandle    = kernel32.NewProc("GetModuleHandleW")
 	procGetCurrentThreadID = kernel32.NewProc("GetCurrentThreadId")
 )
 
-// isDown reports whether the given virtual-key is currently pressed.
-func isDown(vk uintptr) bool {
-	r, _, _ := procGetAsyncKeyState.Call(vk)
-	return r&keyDownBit != 0
-}
-
-// MouseHook is a Windows Trigger that fires on the mouse back button (MB4),
-// hold-to-talk: onPress when it goes down, onRelease when it comes up. It uses a
-// raw WH_MOUSE_LL hook (no CGO) — the mechanism proven out by cmd/hookprobe.
+// MouseHook is a Windows Trigger that fires on a mouse side button, hold-to-talk:
+// onPress when it goes down, onRelease when it comes up. It uses a raw
+// WH_MOUSE_LL hook (no CGO) — the mechanism proven out by cmd/hookprobe.
+//
+// For now it triggers on any X-button (MB4 or MB5). Distinguishing them requires
+// reading MSLLHOOKSTRUCT.mouseData from the hook's lParam; that lands with the
+// settings UI, where the specific button becomes user-configurable. We do NOT
+// use GetAsyncKeyState to tell them apart: a low-level hook fires before the
+// async key-state table updates, so that check is unreliable for the very event
+// being delivered (it was the bug that made holding the button do nothing).
 type MouseHook struct {
 	threadID uintptr
 	hook     uintptr
 }
 
-// NewMouseHook returns a Windows mouse-back-button trigger.
+// NewMouseHook returns a Windows mouse-side-button trigger.
 func NewMouseHook() *MouseHook { return &MouseHook{} }
 
 // Start installs the hook and pumps messages until Stop. It blocks, so run it on
@@ -59,19 +56,18 @@ func (m *MouseHook) Start(onPress, onRelease func()) error {
 	m.threadID = tid
 
 	// pressed is touched only from the single hook thread, so no lock is needed.
+	// It pairs each side-button down with its matching up.
 	var pressed bool
 	callback := syscall.NewCallback(func(nCode, wParam, lParam uintptr) uintptr {
 		if int32(nCode) >= 0 {
 			switch wParam {
 			case wmXButtonDown:
-				// isDown(MB4) distinguishes the back button from the forward one.
-				if !pressed && isDown(vkXButton1) {
+				if !pressed {
 					pressed = true
 					onPress()
 				}
 			case wmXButtonUp:
-				// MB4 is no longer down => it's the button we care about releasing.
-				if pressed && !isDown(vkXButton1) {
+				if pressed {
 					pressed = false
 					onRelease()
 				}
