@@ -1,0 +1,27 @@
+# Binaries
+/0type
+/0type.exe
+/build/
+/bin/
+/dist/
+
+# Models (downloaded, large — never commit)
+/models/
+*.onnx
+*.tar.bz2
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Wails frontend
+/frontend/node_modules/
+/frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
