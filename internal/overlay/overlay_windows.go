@@ -1,9 +1,9 @@
 //go:build windows
 
-// Package overlay shows a small always-on-top "recording" pill that floats near
-// the cursor over whatever app you're dictating into. It is deliberately
-// focus-safe (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT): it must never steal focus,
-// or the paste would land on the overlay instead of the user's document.
+// Package overlay shows a tiny always-on-top "recording" dot that follows the
+// cursor over whatever app you're dictating into. It is deliberately focus-safe
+// (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT): it must never steal focus, or the
+// paste would land on the overlay instead of the user's document.
 package overlay
 
 import (
@@ -31,13 +31,15 @@ const (
 	wmTimer = 0x0113
 
 	swpNoSize     = 0x0001
+	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
 	swpShowWindow = 0x0040
 
-	pulseTimerID = 1
+	followTimerID = 1
+	followMs      = 15 // ~64 Hz cursor follow
 
-	pillW = 116
-	pillH = 30
+	dotSize      = 14 // tiny
+	cursorOffset = 16 // below-right of the pointer
 )
 
 var (
@@ -94,7 +96,7 @@ var (
 	once  sync.Once
 	hwnd  uintptr
 	ready = make(chan struct{})
-	pulse bool
+	tick  int
 )
 
 // rgb builds a COLORREF (0x00BBGGRR).
@@ -109,7 +111,7 @@ func Start() {
 	})
 }
 
-// Show shows (recording) or hides the pill. Safe to call from any goroutine.
+// Show shows (recording) or hides the dot. Safe to call from any goroutine.
 func Show(recording bool) {
 	if hwnd == 0 {
 		return
@@ -121,31 +123,38 @@ func Show(recording bool) {
 	procPostMessageW.Call(hwnd, wmShow, w, 0)
 }
 
+// moveToCursor places the dot just below-right of the pointer.
+func moveToCursor(h uintptr, insertAfter, flags uintptr) {
+	var pt point
+	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	procSetWindowPos.Call(h, insertAfter,
+		uintptr(pt.x+cursorOffset), uintptr(pt.y+cursorOffset), 0, 0, flags)
+}
+
 func wndProc(h, message, wParam, lParam uintptr) uintptr {
 	switch message {
 	case wmShow:
 		if wParam == 1 {
-			var pt point
-			procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-			procSetWindowPos.Call(h, ^uintptr(0), // HWND_TOPMOST
-				uintptr(pt.x+16), uintptr(pt.y+20), 0, 0,
-				swpNoSize|swpNoActivate|swpShowWindow)
-			procSetTimer.Call(h, pulseTimerID, 450, 0)
+			tick = 0
+			moveToCursor(h, ^uintptr(0), swpNoSize|swpNoActivate|swpShowWindow) // HWND_TOPMOST
 			procSetLayeredAttrs.Call(h, 0, 235, lwaAlpha)
-			pulse = true
+			procSetTimer.Call(h, followTimerID, followMs, 0)
 		} else {
-			procKillTimer.Call(h, pulseTimerID)
+			procKillTimer.Call(h, followTimerID)
 			procShowWindow.Call(h, swHide)
 		}
 		return 0
 	case wmTimer:
-		// Breathing flair: fade the pill between bright and dim.
-		pulse = !pulse
-		alpha := uintptr(150)
-		if pulse {
-			alpha = 235
+		moveToCursor(h, 0, swpNoSize|swpNoActivate|swpNoZOrder)
+		// Breathing flair: triangle-wave alpha over ~1.2s.
+		tick++
+		const period = 80
+		p := tick % period
+		if p > period/2 {
+			p = period - p
 		}
-		procSetLayeredAttrs.Call(h, 0, alpha, lwaAlpha)
+		alpha := 150 + p*(235-150)/(period/2)
+		procSetLayeredAttrs.Call(h, 0, uintptr(alpha), lwaAlpha)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(h, message, wParam, lParam)
@@ -177,7 +186,7 @@ func run() {
 		uintptr(unsafe.Pointer(className)),
 		0,
 		wsPopup,
-		0, 0, pillW, pillH,
+		0, 0, dotSize, dotSize,
 		0, 0, hInst, 0,
 	)
 	if h == 0 {
@@ -185,8 +194,8 @@ func run() {
 		return
 	}
 
-	// Rounded pill; alpha is set per-show so the breathing starts fresh.
-	if rgn, _, _ := procCreateRoundRectRgn.Call(0, 0, pillW+1, pillH+1, pillH, pillH); rgn != 0 {
+	// Round the square into a dot.
+	if rgn, _, _ := procCreateRoundRectRgn.Call(0, 0, dotSize+1, dotSize+1, dotSize, dotSize); rgn != 0 {
 		procSetWindowRgn.Call(h, rgn, 1)
 	}
 	procSetLayeredAttrs.Call(h, 0, 235, lwaAlpha)
