@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/saadih/0type/internal/app"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Settings is the user-facing configuration edited in the window and persisted
@@ -47,15 +46,14 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // startEngine builds the dictation engine from the saved settings and starts it.
-// The onState callback drives the window's recording indicator over a Wails event.
+// The recording indicator is a floating overlay driven by the engine itself, so
+// the GUI passes no per-state callback.
 func (a *App) startEngine() {
 	s := a.GetSettings()
 	a.engine = app.New(app.Config{
 		GroqAPIKey: s.GroqAPIKey,
 		CleanupURL: s.CleanupURL,
-	}, func(recording bool) {
-		runtime.EventsEmit(a.ctx, "recording", recording)
-	})
+	}, nil)
 	a.engine.Start()
 }
 

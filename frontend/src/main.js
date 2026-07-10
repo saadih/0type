@@ -1,16 +1,10 @@
 import './style.css';
 import { GetSettings, SaveSettings } from '../wailsjs/go/main/App';
-import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
   <header>
-    <div class="titlebar">
-      <div>
-        <div class="wordmark">0<span>type</span></div>
-        <div class="tagline">no typing allowed</div>
-      </div>
-      <div class="rec" id="rec"><span class="dot"></span>Recording</div>
-    </div>
+    <div class="wordmark">0<span>type</span></div>
+    <div class="tagline">no typing allowed</div>
   </header>
   <main>
     <label class="field">
@@ -65,7 +59,7 @@ function flash(msg, ok = true) {
   const el = $('status');
   el.textContent = msg;
   el.style.color = ok ? 'var(--accent)' : '#f87171';
-  setTimeout(() => { el.textContent = ''; }, 2200);
+  setTimeout(() => { el.textContent = ''; }, 2600);
 }
 
 $('save').addEventListener('click', async () => {
@@ -82,11 +76,6 @@ $('save').addEventListener('click', async () => {
   } catch (e) {
     flash('Error: ' + e, false);
   }
-});
-
-// The engine emits a "recording" event on every press/release; light up the dot.
-EventsOn('recording', (recording) => {
-  $('rec').classList.toggle('active', !!recording);
 });
 
 load();

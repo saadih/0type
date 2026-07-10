@@ -10,6 +10,7 @@ import (
 	"github.com/saadih/0type/internal/cleanup"
 	"github.com/saadih/0type/internal/hotkey"
 	"github.com/saadih/0type/internal/inject"
+	"github.com/saadih/0type/internal/overlay"
 	"github.com/saadih/0type/internal/transcribe"
 )
 
@@ -36,7 +37,8 @@ type Engine struct {
 }
 
 // New builds an engine from cfg. onState (may be nil) is called with true when a
-// recording starts and false when it stops — used for the UI recording indicator.
+// recording starts and false when it stops — an extra hook for UIs beyond the
+// built-in floating overlay.
 func New(cfg Config, onState func(recording bool)) *Engine {
 	var asr transcribe.Transcriber = transcribe.NewStub()
 	if cfg.GroqAPIKey != "" {
@@ -61,9 +63,10 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 	}
 }
 
-// Start launches the engine's goroutines and installs the global trigger. It
-// returns immediately; the trigger runs on its own goroutine.
+// Start launches the engine's goroutines, the floating overlay, and the global
+// trigger. It returns immediately; the trigger runs on its own goroutine.
 func (e *Engine) Start() {
+	overlay.Start()
 	go e.run()
 	go e.processLoop()
 	go func() { _, _ = e.clean.Clean("warm up") }() // prime the cleanup prompt cache
@@ -90,12 +93,14 @@ func (e *Engine) signal(press bool) {
 func (e *Engine) run() {
 	for press := range e.events {
 		if press {
+			overlay.Show(true)
 			e.onState(true)
 			if err := e.rec.Start(); err != nil {
 				log.Printf("record start: %v", err)
 			}
 			continue
 		}
+		overlay.Show(false)
 		e.onState(false)
 		wav, err := e.rec.Stop()
 		if err != nil {
