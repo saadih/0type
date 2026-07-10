@@ -36,12 +36,17 @@ prove the loop with stubs → swap real impls one at a time, from `inject` backw
   text during silence — dictation is full of pauses.
 - Covers 25 European languages including Swedish, at the same size as English-only v2.
 
-**Cleanup — Qwen3.5 4B Instruct** (local, via Ollama)
-- Use the **instruct / non-thinking** variant. Reasoning tokens add latency for a
-  task that needs none.
+**Cleanup — Qwen3.5 4B** (local, via any OpenAI-compatible endpoint)
+- Served by llama.cpp's `llama-server` (or Ollama). Set `ZEROTYPE_CLEANUP_URL`
+  to its base URL to enable cleanup; unset, the pipeline passes the raw transcript.
+- **Disable thinking.** Qwen is a hybrid-reasoning model; it must run with
+  `enable_thinking:false` (server started with `--jinja`) or it spends the whole
+  token budget on a `<think>` trace and returns nothing.
 - Run at **low temperature (~0.2)**. Cleanup should tidy, not rewrite or invent.
+- The **first** request processes the ~400-token system prompt (~11s cold); after
+  that the prefix is cached and requests are ~0.4s. 0type prewarms it on startup.
 - Gemma 3 4B is the multilingual runner-up — A/B test it on Swedish dictation.
-- System prompt lives in [`prompts/cleanup.txt`](../prompts/cleanup.txt).
+- System prompt is embedded from [`internal/cleanup/prompt.txt`](../internal/cleanup/prompt.txt).
 
 ## Trigger
 
@@ -84,6 +89,6 @@ considered. Scope discipline is the competitive advantage.
 
 ## Credits
 
-The cleanup system prompt in `prompts/cleanup.txt` is adapted from
+The cleanup system prompt in `internal/cleanup/prompt.txt` is adapted from
 [OpenWhispr](https://github.com/OpenWhispr/openwhispr) (MIT), with a
 language-preservation rule added and the wake-word placeholder removed.

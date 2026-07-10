@@ -74,11 +74,12 @@ func main() {
 	p := &pipeline{
 		rec:    audio.Default(),
 		asr:    transcribe.Default(),
-		clean:  cleanup.NewNoop(),
+		clean:  cleanup.Default(),
 		inj:    inject.Default(),
 		events: make(chan bool, 16),
 	}
 	go p.run()
+	go p.clean.Clean("warm up") // prime the cleanup model's prompt cache in the background
 
 	trigger := hotkey.Default()
 	fmt.Println("0type - focus a text field, hold the mouse back button (MB4), speak, release. Ctrl+C to quit.")
