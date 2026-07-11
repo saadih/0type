@@ -33,17 +33,13 @@ type Asset struct {
 // Path is where the asset lives locally once downloaded.
 func (a Asset) Path() string { return filepath.Join(Dir(), a.Filename) }
 
-// Installed reports whether the asset is already downloaded. When the expected
-// size is known it is size-checked, so a truncated file isn't treated as ready.
+// Installed reports whether the asset is already downloaded. The .part -> rename
+// in Download guarantees a file at Path() is complete, so existence is enough (a
+// hardcoded size-check would wrongly reject a good download whose real size
+// differs by a byte from our estimate).
 func (a Asset) Installed() bool {
 	fi, err := os.Stat(a.Path())
-	if err != nil {
-		return false
-	}
-	if a.Bytes > 0 {
-		return fi.Size() == a.Bytes
-	}
-	return fi.Size() > 0
+	return err == nil && fi.Size() > 0
 }
 
 // Download fetches the asset into Dir(), calling progress(done, total) as it
