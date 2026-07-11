@@ -68,9 +68,25 @@ func ExtractLlama() (string, error) {
 	return exe, nil
 }
 
+func healthy(url string) bool {
+	c := &http.Client{Timeout: time.Second}
+	resp, err := c.Get(url + "/health")
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
 // StartLlama extracts (if needed) and spawns llama-server against the Qwen GGUF,
-// returning the base URL once /health responds.
+// returning the base URL once /health responds. If a server is already running
+// on the port (e.g. orphaned from a previous run), it is reused.
 func StartLlama() (*Server, string, error) {
+	url := "http://127.0.0.1:" + LlamaPort
+	if healthy(url) {
+		return &Server{}, url, nil
+	}
+
 	exe, err := ExtractLlama()
 	if err != nil {
 		return nil, "", err
@@ -79,7 +95,6 @@ func StartLlama() (*Server, string, error) {
 		return nil, "", fmt.Errorf("qwen model not downloaded")
 	}
 
-	url := "http://127.0.0.1:" + LlamaPort
 	cmd := exec.Command(exe,
 		"-m", Qwen().Path(),
 		"--host", "127.0.0.1", "--port", LlamaPort,
@@ -110,7 +125,7 @@ func StartLlama() (*Server, string, error) {
 	return nil, "", fmt.Errorf("llama-server did not become ready")
 }
 
-// Stop terminates the server process.
+// Stop terminates the server process (no-op for a reused external server).
 func (s *Server) Stop() {
 	if s != nil && s.cmd != nil && s.cmd.Process != nil {
 		s.cmd.Process.Kill()

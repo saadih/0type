@@ -5,11 +5,13 @@ package app
 
 import (
 	"log"
+	"sync"
 
 	"github.com/saadih/0type/internal/audio"
 	"github.com/saadih/0type/internal/cleanup"
 	"github.com/saadih/0type/internal/hotkey"
 	"github.com/saadih/0type/internal/inject"
+	"github.com/saadih/0type/internal/models"
 	"github.com/saadih/0type/internal/overlay"
 	"github.com/saadih/0type/internal/transcribe"
 )
@@ -21,7 +23,7 @@ const minRecordingBytes = 44 + 16000*2*15/100
 // Config selects the backends and the initial trigger binding.
 type Config struct {
 	GroqAPIKey string // cloud transcription; empty -> stub transcript
-	CleanupURL string // local LLM base URL; empty -> pass-through
+	CleanupURL string // local LLM base URL; empty -> auto-start bundled server if the model is present
 	Binding    hotkey.Binding
 }
 
@@ -29,12 +31,16 @@ type Config struct {
 type Engine struct {
 	rec     audio.Recorder
 	asr     transcribe.Transcriber
-	clean   cleanup.Cleaner
 	inj     inject.Injector
 	trig    hotkey.Controller
 	onState func(recording bool)
 	events  chan bool
 	jobs    chan []byte
+
+	cleanMu    sync.Mutex // guards clean and srv
+	clean      cleanup.Cleaner
+	cleanupSet bool // an explicit cleanup URL was configured
+	srv        *models.Server
 }
 
 // New builds an engine from cfg. onState (may be nil) is called with true when a
@@ -57,25 +63,67 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 		b = hotkey.DefaultBinding()
 	}
 	return &Engine{
-		rec:     audio.Default(),
-		asr:     asr,
-		clean:   clean,
-		inj:     inject.Default(),
-		trig:    hotkey.New(b),
-		onState: onState,
-		events:  make(chan bool, 16),
-		jobs:    make(chan []byte, 8),
+		rec:        audio.Default(),
+		asr:        asr,
+		inj:        inject.Default(),
+		trig:       hotkey.New(b),
+		onState:    onState,
+		events:     make(chan bool, 16),
+		jobs:       make(chan []byte, 8),
+		clean:      clean,
+		cleanupSet: cfg.CleanupURL != "",
 	}
 }
 
-// Start launches the engine's goroutines, the floating overlay, and the global
-// trigger. It returns after the trigger's hooks are installed (or an error).
+// Start launches the engine's goroutines, the floating overlay, the bundled
+// cleanup server (if applicable), and the global trigger.
 func (e *Engine) Start() error {
 	overlay.Start()
+	e.maybeStartLocalServer()
 	go e.run()
 	go e.processLoop()
-	go func() { _, _ = e.clean.Clean("warm up") }() // prime the cleanup prompt cache
+	go func() { _, _ = e.cleaner().Clean("warm up") }() // prime the cleanup prompt cache
 	return e.trig.Start(e.onPress, e.onRelease)
+}
+
+// cleaner returns the current cleaner under lock.
+func (e *Engine) cleaner() cleanup.Cleaner {
+	e.cleanMu.Lock()
+	defer e.cleanMu.Unlock()
+	return e.clean
+}
+
+// SetCleanupURL swaps the cleanup backend live and pre-warms it.
+func (e *Engine) SetCleanupURL(url string) {
+	e.cleanMu.Lock()
+	if url == "" {
+		e.clean = cleanup.NewNoop()
+	} else {
+		e.clean = cleanup.NewLLM(url)
+	}
+	c := e.clean
+	e.cleanMu.Unlock()
+	go func() { _, _ = c.Clean("warm up") }()
+}
+
+// maybeStartLocalServer spins up the bundled llama-server for cleanup when the
+// Qwen model is downloaded and no explicit cleanup URL was configured.
+func (e *Engine) maybeStartLocalServer() {
+	if e.cleanupSet || !models.Qwen().Installed() {
+		return
+	}
+	go func() {
+		srv, url, err := models.StartLlama()
+		if err != nil {
+			log.Printf("local cleanup server: %v", err)
+			return
+		}
+		e.cleanMu.Lock()
+		e.srv = srv
+		e.cleanMu.Unlock()
+		e.SetCleanupURL(url)
+		log.Printf("local cleanup ready at %s", url)
+	}()
 }
 
 // Rebind captures the next key/button the user presses, applies it live, and
@@ -87,6 +135,16 @@ func (e *Engine) Rebind() (hotkey.Binding, error) {
 	}
 	e.trig.SetBinding(b)
 	return b, nil
+}
+
+// Stop shuts down the bundled cleanup server if the engine started one.
+func (e *Engine) Stop() {
+	e.cleanMu.Lock()
+	srv := e.srv
+	e.cleanMu.Unlock()
+	if srv != nil {
+		srv.Stop()
+	}
 }
 
 func (e *Engine) onPress()   { e.signal(true) }
@@ -140,7 +198,7 @@ func (e *Engine) process(wav []byte) {
 		log.Printf("transcribe: %v", err)
 		return
 	}
-	text, err := e.clean.Clean(raw)
+	text, err := e.cleaner().Clean(raw)
 	if err != nil {
 		log.Printf("cleanup: %v", err)
 		text = raw // fall back to the raw transcript rather than dropping it
