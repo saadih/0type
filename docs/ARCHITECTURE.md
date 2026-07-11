@@ -1,94 +1,71 @@
 # Architecture
 
-0type is a push-to-talk dictation tool. The entire product is one loop:
+0type is a push-to-talk dictation tool built around one loop:
 
-**hold a button → speak → transcribe → clean up → paste at the cursor.**
+```
+hold a button → record → transcribe → clean up → paste at the cursor
+```
 
-Everything else is in service of making that loop feel instant and work in every app.
+The rest of the code exists to make that loop quick and work in every app.
 
 ## Pipeline
 
-```
-trigger (hold) ─▶ record mic ─▶ transcribe (ASR) ─▶ clean (LLM) ─▶ inject
-```
+The console (`cmd/0type`) and the GUI (repo root) share one engine, `internal/app.Engine`. Each stage is a small interface, so backends swap without touching the wiring:
 
-Each stage is a small interface in `internal/`, so implementations swap without
-touching the wiring in `cmd/0type/main.go`:
+| Stage | Package | Implementation |
+|---|---|---|
+| Trigger | `internal/hotkey` | Low-level mouse + keyboard hook, rebindable |
+| Record | `internal/audio` | winmm `waveIn`, 16 kHz mono PCM, no CGO |
+| Transcribe | `internal/transcribe` | Parakeet via sherpa-onnx (cgo), or Groq, or a stub |
+| Clean | `internal/cleanup` | Qwen via an OpenAI-compatible endpoint |
+| Inject | `internal/inject` | Clipboard write, paste, restore |
+| Overlay | `internal/overlay` | Floating recording dot, raw Win32 |
 
-| Stage | Package | Interface | MVP implementation |
-|---|---|---|---|
-| Trigger | `internal/hotkey` | `Trigger` | robotgo global hook (mouse buttons + keys) |
-| Record | `internal/audio` | `Recorder` | miniaudio (malgo), 16 kHz mono PCM |
-| Transcribe | `internal/transcribe` | `Transcriber` | sherpa-onnx + Parakeet TDT 0.6B v3 |
-| Clean | `internal/cleanup` | `Cleaner` | Qwen3.5 4B Instruct via Ollama |
-| Inject | `internal/inject` | `Injector` | clipboard write + paste + restore |
+The engine runs three goroutines: the trigger's hook thread, a worker that starts and stops recording, and a single output worker that transcribes, cleans, and injects one recording at a time.
 
-The committed skeleton ships stdlib-only stubs for every stage, so the pipeline
-runs and prints end-to-end before any native dependency is added. Build order:
-prove the loop with stubs → swap real impls one at a time, from `inject` backwards
-(inject is the most satisfying to see work, and it's the cheapest to verify).
+## Models
 
-## Model choices
+**Transcription: Parakeet TDT 0.6B v3** (`sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`)
 
-**ASR — Parakeet TDT 0.6B v3** (`sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`)
-- ~10× faster than Whisper large-v3; sub-second on short clips even on CPU.
-- Lower English WER (6.32% vs 7.44%) and, crucially, it does **not** hallucinate
-  text during silence — dictation is full of pauses.
-- Covers 25 European languages including Swedish, at the same size as English-only v2.
+- Runs about 10x faster than Whisper large-v3, under a second on short clips.
+- Lower English word error rate (6.32% vs 7.44%), and it doesn't hallucinate text during silence. Dictation is full of pauses, so that matters.
+- Covers 25 European languages including Swedish, at the size of the English-only v2.
+- Runs in-process through `sherpa-onnx-go` (CGO). It sits behind the `parakeet` build tag, so the default build stays CGO-free.
 
-**Cleanup — Qwen3.5 4B** (local, via any OpenAI-compatible endpoint)
-- Served by llama.cpp's `llama-server` (or Ollama). Set `ZEROTYPE_CLEANUP_URL`
-  to its base URL to enable cleanup; unset, the pipeline passes the raw transcript.
-- **Disable thinking.** Qwen is a hybrid-reasoning model; it must run with
-  `enable_thinking:false` (server started with `--jinja`) or it spends the whole
-  token budget on a `<think>` trace and returns nothing.
-- Run at **low temperature (~0.2)**. Cleanup should tidy, not rewrite or invent.
-- The **first** request processes the ~400-token system prompt (~11s cold); after
-  that the prefix is cached and requests are ~0.4s. 0type prewarms it on startup.
-- Gemma 3 4B is the multilingual runner-up — A/B test it on Swedish dictation.
-- System prompt is embedded from [`internal/cleanup/prompt.txt`](../internal/cleanup/prompt.txt).
+**Cleanup: Qwen 3.5 4B** (Q4_K_M GGUF)
+
+- 0type downloads a `llama-server` binary and the GGUF, spawns the server itself (`--jinja -ngl 99`), and points the cleaner at it. A server already running on the port gets reused.
+- Qwen is a hybrid-reasoning model. Requests send `enable_thinking:false` and the server runs with `--jinja`, or Qwen spends its whole token budget on a `<think>` trace and returns nothing.
+- Cleanup runs at temperature 0.2 so it tidies instead of rewriting.
+- The first request processes the ~400-token system prompt (about 11s cold), then the prefix caches and later requests take about 0.4s. 0type prewarms it on startup.
+- The system prompt lives in [`internal/cleanup/prompt.txt`](../internal/cleanup/prompt.txt).
 
 ## Trigger
 
-- **Default: mouse back button (MB4), hold-to-talk.** This is why the project exists.
-- **Fully rebindable** to any key or mouse button — the capability Electron's
-  `globalShortcut` lacks and the feature that sets 0type apart.
-- **Two modes:** *hold* (default, for a sentence) and *toggle* (tap on/off, for
-  long-form so you're not physically holding a button for minutes).
-- **Keyboard fallback default: Right Ctrl.** Avoid Right Alt — it's AltGr on
-  international / Swedish layouts.
-- **First thing to de-risk:** confirm the global hook actually reports mouse side
-  buttons (MB4/MB5) on Windows, not just left/right/middle. The whole idea rests on it.
+- The default binding is the mouse back button (MB4), hold to talk. That's the reason the project exists.
+- Rebind it to any key or mouse side/middle button, and the change applies live. Electron's `globalShortcut` can't bind a mouse button at all.
+- The hook installs one low-level mouse hook and one low-level keyboard hook, then matches whatever binding is current. Rebinding swaps the target under a lock, so nothing reinstalls.
+- Reading which button fired means reading the OS hook struct from `lParam`. `go vet` flags that conversion. It's the standard WinAPI pattern; see CONTRIBUTING.
 
-## Engineering gotchas (works vs. feels instant)
+## What makes it feel quick
 
-1. **Inject via clipboard-paste, not simulated typing.** Save clipboard → set text →
-   send Ctrl/Cmd+V → restore clipboard. Char-by-char typing is slow and mangles
-   Unicode (Swedish å/ä/ö, emoji). Biggest single "feel" detail.
-2. **Pre-warm both models on launch.** Load Parakeet and the LLM into memory at
-   startup so the first dictation isn't a multi-second stall.
-3. **Never block the hook callback.** ASR and LLM run on worker goroutines; the
-   input hook stays instant. Go's concurrency makes this trivial.
-4. **Cleanup is the slowest link on CPU.** Offer a "raw / fast" mode
-   (`cleanup.Noop`) that skips the LLM — Parakeet alone is near-instant.
+1. **Paste, don't type.** Inject saves the clipboard, writes the text, sends Ctrl+V, then restores the clipboard. Simulating keystrokes is slow and mangles Swedish characters and emoji.
+2. **Prewarm the cleanup cache.** The engine fires a throwaway cleanup on startup, so the first real dictation reuses the cached system prompt.
+3. **Keep the hook thread free.** The hook callback only sends on a channel. Recording, transcription, and cleanup run on other goroutines, so a slow step never lags the system mouse.
+4. **One output worker.** Recordings queue through a single goroutine, so two quick dictations can't fight over the clipboard or land out of order.
 
-## UI (Wails)
+## The overlay
 
-0type is a **tray app**, not a window you keep open.
-- Tray menu: enable/disable · settings · quit.
-- Settings window: the key-binding recorder (press your button/key to bind, mouse
-  buttons included), mode (hold/toggle), language, cleanup on/off + endpoint.
-- Recording HUD: a small floating pill near the cursor — *listening → transcribing*.
-  80% of the premium feel; ship in MVP if time allows, else v1.1.
+A raw Win32 layered window shows a red dot that follows the cursor while you record. It's built `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, so it never takes focus. If it did, the paste would land on the overlay instead of your document.
 
-## Out of scope (deliberately)
+## Distribution
 
-History, custom vocabulary / auto-learn, multiple profiles, cloud sync,
-"workflows," model marketplaces. The core loop stays flawless before any of it is
-considered. Scope discipline is the competitive advantage.
+Nothing heavy lives in git. `internal/models` downloads the GGUF, the Parakeet model, and the `llama-server` binary on demand into `%LOCALAPPDATA%\0type\`, streaming each to a `.part` file and renaming on success. The sherpa DLLs come from the Go module cache; `scripts/build-parakeet.ps1` copies them next to the exe.
+
+## Out of scope
+
+History, custom vocabulary, multiple profiles, cloud sync, workflows, and model marketplaces stay out. The loop comes first.
 
 ## Credits
 
-The cleanup system prompt in `internal/cleanup/prompt.txt` is adapted from
-[OpenWhispr](https://github.com/OpenWhispr/openwhispr) (MIT), with a
-language-preservation rule added and the wake-word placeholder removed.
+The cleanup prompt in `internal/cleanup/prompt.txt` is adapted from [OpenWhispr](https://github.com/OpenWhispr/openwhispr) (MIT), with a language rule added and the wake-word placeholder removed.

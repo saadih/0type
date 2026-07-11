@@ -1,93 +1,73 @@
 # Contributing to 0type
 
-Thanks for your interest! 0type is small on purpose — the goal is a fast,
-local, native push-to-talk dictation tool that does one loop flawlessly:
-**hold → talk → clean text at your cursor.** Contributions that sharpen that
-loop (or extend it without bloating it) are very welcome.
+0type stays small on purpose. It does one loop: hold a button, talk, get clean text at your cursor. Changes that sharpen that loop, or extend it without bloating it, are welcome.
 
 ## Ground rules
 
-- **Keep it lean.** Before adding a feature, ask whether it belongs in the core
-  loop. History, cloud sync, accounts, "workflows", model marketplaces — out of
-  scope by design.
-- **Local-first.** New transcription/cleanup backends should be able to run on
-  the user's machine. Cloud is a fallback, never a requirement.
-- **Nothing heavy in the repo.** Models and native binaries are downloaded on
-  demand into the user's data dir — never committed.
+- **Keep it lean.** Before adding a feature, ask whether it belongs in the core loop. History, cloud sync, accounts, workflows, and model marketplaces stay out.
+- **Run locally.** A new transcription or cleanup backend should run on the user's machine. Cloud is a fallback, not a requirement.
+- **Keep the repo light.** Models and native binaries download on demand into the user's data dir. Don't commit them.
 
 ## Prerequisites
 
 - [Go](https://go.dev/) 1.23+
-- [Node.js](https://nodejs.org/) + the Wails CLI:
-  `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-- WebView2 (preinstalled on Windows 11)
-- **For the Parakeet (CGO) build only:** a C toolchain —
-  `winget install BrechtSanders.WinLibs.POSIX.UCRT`, then reopen your terminal.
+- [Node.js](https://nodejs.org/) and the Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
+- WebView2 (ships with Windows 11)
+- A C toolchain for the Parakeet build: `winget install BrechtSanders.WinLibs.POSIX.UCRT`, then reopen your terminal
 
 ## Project layout
 
 ```
 cmd/0type/        headless console build of the engine
-main.go, app.go   the Wails GUI (window + settings + model downloads)
+main.go, app.go   the Wails GUI (window, settings, model downloads)
 frontend/         the settings UI (vanilla JS + Vite)
 internal/
-  app/            the shared dictation Engine
+  app/            the shared dictation engine
   hotkey/         global keyboard+mouse hook, rebinding, capture
   audio/          winmm microphone capture
   transcribe/     Parakeet (cgo) | Groq | stub
   cleanup/        Qwen via an OpenAI-compatible endpoint
-  inject/         clipboard-paste
+  inject/         clipboard paste
   overlay/        floating recording dot
   models/         on-demand downloads + bundled llama-server
-docs/ARCHITECTURE.md   design + the "feels instant" gotchas
+docs/ARCHITECTURE.md   design and the details that keep it quick
 ```
 
-Almost everything is an interface with a Windows implementation and a non-Windows
-stub, so the module builds everywhere even though the app is Windows-first.
+Most stages have a Windows implementation and a non-Windows stub, so the module builds everywhere even though the app targets Windows.
 
 ## Dev workflow
 
 ```powershell
-wails dev                     # hot-reload the GUI
-go run ./cmd/0type            # headless engine, no window
-go build ./... ; go vet ./... # default (CGO-free) build must stay green
+wails dev                         # hot-reload the GUI
+go run ./cmd/0type                # headless engine, no window
+go build ./... ; go vet ./...     # the default (CGO-free) build stays green
 pwsh scripts/build-parakeet.ps1   # the full local-transcription build
 ```
 
-**Before opening a PR:**
+Before you open a PR:
 
 - `go build ./...` and `go vet ./...` pass on the default (CGO-free) build.
 - If you touched the Parakeet path, `pwsh scripts/build-parakeet.ps1` still builds.
-- Verify behavior by actually driving the loop (the `verify` mindset), not just
-  compiling.
+- Drive the loop and watch it work. A clean compile isn't enough.
 
-### Expected `go vet` notes
+### Expected go vet notes
 
-`internal/hotkey/manager_windows.go` has two `possible misuse of unsafe.Pointer`
-notes. These are the **necessary, standard WinAPI idiom** for reading the
-low-level hook structs from `lParam`; they are not defects. Please don't "fix"
-them by weakening the hook.
+`internal/hotkey/manager_windows.go` reports two "possible misuse of unsafe.Pointer" notes. They read the low-level hook structs from `lParam`, which is the standard WinAPI pattern. Leave them, and don't weaken the hook to silence them.
 
 ## Adding a backend
 
-- **A transcriber** implements `transcribe.Transcriber` (`Transcribe(wav []byte)
-  (string, error)`, input is a 16 kHz mono 16-bit WAV). Wire it in
-  `internal/app/engine.go`.
-- **A cleaner** implements `cleanup.Cleaner`. The default talks to an
-  OpenAI-compatible chat endpoint.
-- **A downloadable model/binary** is an `models.Asset`; add a constructor to
-  `internal/models/registry.go` with an **official, stable URL**.
+- A transcriber implements `transcribe.Transcriber`: `Transcribe(wav []byte) (string, error)`, where the input is a 16 kHz mono 16-bit WAV. Wire it into `internal/app/engine.go`.
+- A cleaner implements `cleanup.Cleaner`. The default one talks to an OpenAI-compatible chat endpoint.
+- A downloadable model or binary is a `models.Asset`. Add a constructor to `internal/models/registry.go` with an official, stable URL.
 
-Native-heavy backends should live behind a build tag (see the `parakeet` tag) so
-the default build stays CGO-free.
+Put native-heavy backends behind a build tag, the way the `parakeet` tag works, so the default build stays CGO-free.
 
-## Commits & PRs
+## Commits and PRs
 
-- Small, focused commits with a clear message (what changed and why).
-- One logical change per PR; describe how you verified it.
+- Small, focused commits. Say what changed and why.
+- One logical change per PR. Describe how you tested it.
 - Match the surrounding code's style and comment density.
 
 ## License
 
-By contributing, you agree your contributions are licensed under the project's
-[MIT license](LICENSE).
+By contributing, you agree your work is licensed under the project's [MIT license](LICENSE).
