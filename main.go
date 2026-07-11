@@ -28,6 +28,13 @@ func main() {
 		OnShutdown:       app.shutdown,
 		OnBeforeClose:    app.beforeClose,
 		Bind:             []interface{}{app},
+		// One running copy only. Two instances would each install the global
+		// hook and both paste the same dictation, so a launch while one is
+		// already in the tray just surfaces the existing window.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:               "0type.saadih.github.io",
+			OnSecondInstanceLaunch: func(options.SecondInstanceData) { app.trayOpen() },
+		},
 	})
 	if err != nil {
 		println("Error:", err.Error())
