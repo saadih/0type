@@ -12,6 +12,12 @@ type Recorder interface {
 	Stop() ([]byte, error)
 }
 
+// DeviceSelector is an optional Recorder capability: picking the input device by
+// name ("" = system default). Backends without it are simply left on default.
+type DeviceSelector interface {
+	SetInputDevice(name string)
+}
+
 // Stub returns empty audio — enough to exercise the pipeline.
 type Stub struct{}
 

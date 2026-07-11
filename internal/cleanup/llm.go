@@ -61,9 +61,10 @@ func (l *LLM) Clean(raw string) (string, error) {
 		"temperature": 0.2,
 		"max_tokens":  512,
 		"stream":      false,
-		// Qwen is a hybrid-reasoning model; without this it spends the whole
-		// token budget on a <think> trace and returns no answer. Needs the
-		// server launched with --jinja so the chat template honors the flag.
+		// The default cleanup model (Qwen3-4B-Instruct) has no thinking mode, so
+		// this is a no-op there. It stays as a guard for anyone pointing the
+		// cleaner at a hybrid-reasoning model, which would otherwise spend the
+		// whole budget on a <think> trace. Needs the server launched with --jinja.
 		"chat_template_kwargs": map[string]any{"enable_thinking": false},
 	}
 	body, err := json.Marshal(payload)

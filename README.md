@@ -13,9 +13,9 @@ hold trigger → record → Parakeet (local) → Qwen (local) → paste at curso
 Most dictation tools can't bind to a mouse button, ship your audio to a server, or wrap a simple loop in features you never asked for. 0type keeps the loop small:
 
 - **Binds to your mouse.** Global push-to-talk on a side button (MB4/MB5), which Electron's `globalShortcut` can't reach. Rebind it live to any key or button.
-- **Runs on your machine.** Parakeet handles transcription, Qwen 3.5 4B handles cleanup, both downloaded on demand.
+- **Runs on your machine.** Parakeet handles transcription, Qwen3-4B-Instruct handles cleanup, both downloaded on demand.
 - **Small.** An 11 MB native binary over WebView2. Electron apps run ten times that. The hook, audio capture, and overlay are plain Go with no bundled browser.
-- **Focused.** One window, a recording dot, a few settings.
+- **Focused.** One window that tucks into the system tray, a cursor dot, a few settings.
 
 ## What it does
 
@@ -24,9 +24,9 @@ Most dictation tools can't bind to a mouse button, ship your audio to a server, 
 | Trigger | Global low-level hook, rebindable to any key or mouse side/middle button, applied live |
 | Capture | Microphone via `winmm` (no CGO) |
 | Transcribe | Parakeet TDT 0.6B v3 via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), 25 European languages including Swedish |
-| Clean up | Qwen 3.5 4B via a bundled [llama.cpp](https://github.com/ggml-org/llama.cpp) server: drops filler, fixes punctuation, keeps your wording |
+| Clean up | Qwen3-4B-Instruct via a bundled [llama.cpp](https://github.com/ggml-org/llama.cpp) server: drops filler, fixes punctuation, keeps your wording |
 | Inject | Clipboard paste, which handles å/ä/ö and emoji |
-| Feedback | A red dot that follows your cursor while recording |
+| Feedback | A dot that follows your cursor: red while recording, blue while it transcribes and cleans up |
 
 You download the models from HuggingFace and GitHub releases into `%LOCALAPPDATA%\0type\`. They never touch this repo or the binary.
 
@@ -69,7 +69,11 @@ Both write `build\bin\0type.exe`. The Parakeet build also drops `onnxruntime.dll
 
 - **Trigger:** click Rebind, then press any key or mouse button. Pick something you don't type, like an F-key, a side button, Right Ctrl, or Caps Lock.
 - **Mode:** hold to talk, or tap to toggle.
+- **Microphone:** use the system default or pick a specific input device.
+- **Start with Windows:** launch 0type at login.
 - **Models:** download or re-download Parakeet and Qwen.
+
+Closing the window hides 0type to the system tray, where it keeps listening. Right-click the tray icon for Open or Quit.
 
 ## How it's built
 
@@ -82,7 +86,9 @@ internal/
   transcribe/ Parakeet (sherpa-onnx, cgo) | Groq | stub
   cleanup/    Qwen via an OpenAI-compatible endpoint
   inject/     clipboard paste                                  (raw Win32)
-  overlay/    floating recording dot                           (raw Win32)
+  overlay/    cursor dot: red recording, blue processing       (raw Win32)
+  tray/       system tray icon + Open/Quit menu                (raw Win32)
+  autostart/  run-at-login toggle (HKCU Run key)
   models/     on-demand downloads + bundled llama-server
 ```
 

@@ -44,6 +44,12 @@ main {
 }
 .field em { font-style: normal; font-weight: 400; text-transform: none; letter-spacing: 0; }
 
+.row-field { flex-direction: row; align-items: center; justify-content: space-between; }
+.row-field input[type="checkbox"] {
+  width: 18px; height: 18px; padding: 0; flex: 0 0 auto;
+  accent-color: var(--accent); cursor: pointer;
+}
+
 input, select {
   background: var(--panel);
   color: var(--text);
@@ -116,4 +122,5 @@ footer {
   padding: 14px 24px 20px;
   border-top: 1px solid var(--line);
 }
-#status { font-size: 13px; }
+#status { font-size: 13px; flex: 1; }
+.version { font-size: 11px; color: var(--muted); margin-right: 12px; }

@@ -7,12 +7,31 @@
 // (sherpa-onnx) will slot in behind the same interface.
 package transcribe
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 // Transcriber converts WAV audio into a raw transcript.
 type Transcriber interface {
 	Transcribe(wav []byte) (string, error)
 }
+
+// ErrNoModel means no transcription backend is available: no local model
+// downloaded and no cloud key. The engine turns it into a "download a model"
+// notice instead of pasting anything.
+var ErrNoModel = errors.New("no transcription model installed")
+
+// NeedModel is the GUI's placeholder when nothing is ready. It transcribes
+// nothing and reports ErrNoModel, so a fresh install prompts for a download
+// rather than pasting the stub's canned text.
+type NeedModel struct{}
+
+// NewNeedModel returns a transcriber that always reports ErrNoModel.
+func NewNeedModel() *NeedModel { return &NeedModel{} }
+
+// Transcribe always returns ErrNoModel.
+func (n *NeedModel) Transcribe(wav []byte) (string, error) { return "", ErrNoModel }
 
 // Default returns Groq when GROQ_API_KEY is set, otherwise the stub. The key is
 // only ever read from the environment — never hardcoded or committed.

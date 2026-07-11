@@ -4,9 +4,11 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 
 	"github.com/saadih/0type/internal/audio"
 	"github.com/saadih/0type/internal/cleanup"
@@ -23,9 +25,15 @@ const minRecordingBytes = 44 + 16000*2*15/100
 
 // Config selects the backends and the initial trigger binding.
 type Config struct {
-	GroqAPIKey string // cloud transcription; empty -> stub transcript
-	CleanupURL string // local LLM base URL; empty -> auto-start bundled server if the model is present
-	Binding    hotkey.Binding
+	GroqAPIKey  string // cloud transcription; empty -> local Parakeet or (if AllowStub) the stub
+	CleanupURL  string // local LLM base URL; empty -> auto-start bundled server if the model is present
+	Binding     hotkey.Binding
+	Mode        string // "hold" (default) | "toggle"
+	InputDevice string // microphone name; empty -> system default
+	AllowStub   bool   // console/dev: fall back to the canned stub transcript when nothing else is available
+	// Notify (may be nil) surfaces user-facing messages to a UI. kind is
+	// "info" or "error".
+	Notify func(kind, msg string)
 }
 
 // Engine wires the dictation pipeline together and runs it.
@@ -46,6 +54,9 @@ type Engine struct {
 	srv        *models.Server
 	srvMu      sync.Mutex // serializes local cleanup-server startup
 
+	toggleMode atomic.Bool            // true -> tap to toggle; false -> hold to talk
+	notify     func(kind, msg string) // optional UI notifier; set once before Start
+
 	ovMu       sync.Mutex // guards the overlay state below
 	recording  bool
 	processing int // in-flight jobs being transcribed/cleaned
@@ -55,9 +66,17 @@ type Engine struct {
 // recording starts and false when it stops — an extra hook for UIs beyond the
 // built-in floating overlay.
 func New(cfg Config, onState func(recording bool)) *Engine {
-	var asr transcribe.Transcriber = transcribe.NewStub()
-	if cfg.GroqAPIKey != "" {
+	// Base backend: cloud if a key is set, else the canned stub for console/dev,
+	// else a placeholder that reports ErrNoModel so the GUI prompts for a
+	// download instead of pasting fake text.
+	var asr transcribe.Transcriber
+	switch {
+	case cfg.GroqAPIKey != "":
 		asr = transcribe.NewGroq(cfg.GroqAPIKey)
+	case cfg.AllowStub:
+		asr = transcribe.NewStub()
+	default:
+		asr = transcribe.NewNeedModel()
 	}
 	// Prefer local Parakeet when the model is downloaded and it's compiled in
 	// (built with -tags parakeet); NewParakeet errors on the stub build.
@@ -79,8 +98,12 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 	if !b.Valid() {
 		b = hotkey.DefaultBinding()
 	}
-	return &Engine{
-		rec:        audio.Default(),
+	rec := audio.Default()
+	if ds, ok := rec.(audio.DeviceSelector); ok {
+		ds.SetInputDevice(cfg.InputDevice)
+	}
+	e := &Engine{
+		rec:        rec,
 		asr:        asr,
 		inj:        inject.Default(),
 		trig:       hotkey.New(b),
@@ -89,7 +112,10 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 		jobs:       make(chan []byte, 8),
 		clean:      clean,
 		cleanupSet: cfg.CleanupURL != "",
+		notify:     cfg.Notify,
 	}
+	e.toggleMode.Store(cfg.Mode == "toggle")
+	return e
 }
 
 // Start launches the engine's goroutines, the floating overlay, the bundled
@@ -137,6 +163,24 @@ func (e *Engine) EnableLocalTranscription() error {
 	e.asr = p
 	e.asrMu.Unlock()
 	return nil
+}
+
+// emit sends a user-facing message to the UI notifier, if one was set.
+func (e *Engine) emit(kind, msg string) {
+	if e.notify != nil {
+		e.notify(kind, msg)
+	}
+}
+
+// SetMode switches between hold ("hold") and tap-to-toggle ("toggle") live.
+func (e *Engine) SetMode(mode string) { e.toggleMode.Store(mode == "toggle") }
+
+// SetInputDevice selects the microphone by name ("" = system default). It takes
+// effect on the next recording.
+func (e *Engine) SetInputDevice(name string) {
+	if ds, ok := e.rec.(audio.DeviceSelector); ok {
+		ds.SetInputDevice(name)
+	}
 }
 
 // SetCleanupURL swaps the cleanup backend live and pre-warms it.
@@ -259,32 +303,63 @@ func (e *Engine) overlayMode() overlay.Mode {
 }
 
 func (e *Engine) run() {
+	capturing := false // current state, so toggle mode knows when to stop
 	for press := range e.events {
-		if press {
-			e.setRecording(true)
-			e.onState(true)
-			if err := e.rec.Start(); err != nil {
-				log.Printf("record start: %v", err)
+		if e.toggleMode.Load() {
+			if !press {
+				continue // toggle reacts to the press, not the release
+			}
+			if capturing {
+				capturing = false
+				e.stopCapture()
+			} else {
+				capturing = e.startCapture()
 			}
 			continue
 		}
-		e.onState(false)
-		wav, err := e.rec.Stop()
-		if err != nil {
-			e.setRecording(false)
-			log.Printf("record stop: %v", err)
-			continue
+		// hold to talk
+		if press {
+			capturing = e.startCapture()
+		} else if capturing {
+			capturing = false
+			e.stopCapture()
 		}
-		if len(wav) < minRecordingBytes {
-			e.setRecording(false) // too short to be speech — ignore the tap
-			continue
-		}
-		// Mark processing before clearing recording so the dot goes red -> blue
-		// with no hidden flicker; the output worker clears it when done.
-		e.addProcessing(1)
-		e.setRecording(false)
-		e.jobs <- wav
 	}
+}
+
+// startCapture shows the dot and opens the mic. It returns false (and stays
+// idle) if the mic can't be opened.
+func (e *Engine) startCapture() bool {
+	e.setRecording(true)
+	e.onState(true)
+	if err := e.rec.Start(); err != nil {
+		log.Printf("record start: %v", err)
+		e.emit("error", "Could not open the microphone.")
+		e.onState(false)
+		e.setRecording(false)
+		return false
+	}
+	return true
+}
+
+// stopCapture ends the recording and hands it to the output worker.
+func (e *Engine) stopCapture() {
+	e.onState(false)
+	wav, err := e.rec.Stop()
+	if err != nil {
+		e.setRecording(false)
+		log.Printf("record stop: %v", err)
+		return
+	}
+	if len(wav) < minRecordingBytes {
+		e.setRecording(false) // too short to be speech — ignore the tap
+		return
+	}
+	// Mark processing before clearing recording so the dot goes red -> blue with
+	// no hidden flicker; the output worker clears it when done.
+	e.addProcessing(1)
+	e.setRecording(false)
+	e.jobs <- wav
 }
 
 // processLoop is the single ordered output worker: transcribe -> clean -> inject,
@@ -299,12 +374,18 @@ func (e *Engine) process(wav []byte) {
 	defer e.addProcessing(-1) // clear the blue dot when this job finishes
 	raw, err := e.transcriber().Transcribe(wav)
 	if err != nil {
-		log.Printf("transcribe: %v", err)
+		if errors.Is(err, transcribe.ErrNoModel) {
+			e.emit("error", "Download a transcription model to start dictating.")
+		} else {
+			log.Printf("transcribe: %v", err)
+			e.emit("error", "Transcription failed.")
+		}
 		return
 	}
 	text, err := e.cleaner().Clean(raw)
 	if err != nil {
 		log.Printf("cleanup: %v", err)
+		e.emit("info", "Cleanup unavailable; pasted the raw transcript.")
 		text = raw // fall back to the raw transcript rather than dropping it
 	}
 	if text == "" {

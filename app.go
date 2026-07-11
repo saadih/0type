@@ -6,23 +6,30 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/saadih/0type/internal/app"
+	"github.com/saadih/0type/internal/audio"
+	"github.com/saadih/0type/internal/autostart"
 	"github.com/saadih/0type/internal/hotkey"
 	"github.com/saadih/0type/internal/models"
+	"github.com/saadih/0type/internal/tray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// Version is the app version shown in the window footer. Bump it per release.
+const Version = "0.1.1"
 
 // Settings is the user-facing configuration edited in the window and persisted
 // to the OS config dir (%APPDATA%\0type\config.json on Windows).
 type Settings struct {
-	Trigger  hotkey.Binding `json:"trigger"`
-	Mode     string         `json:"mode"`     // "hold" | "toggle"
-	Language string         `json:"language"` // "auto" | "en" | "sv"
+	Trigger     hotkey.Binding `json:"trigger"`
+	Mode        string         `json:"mode"`        // "hold" | "toggle"
+	InputDevice string         `json:"inputDevice"` // microphone name; "" = system default
 }
 
 func defaultSettings() Settings {
-	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold", Language: "auto"}
+	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold"}
 }
 
 // App is the Wails backend bound to the frontend.
@@ -32,6 +39,7 @@ type App struct {
 	settings Settings
 	path     string
 	engine   *app.Engine
+	quitting atomic.Bool // true once the user picked tray Quit, so close really closes
 }
 
 // NewApp creates the app with defaults and the config-file path resolved.
@@ -39,25 +47,60 @@ func NewApp() *App {
 	return &App{settings: defaultSettings(), path: configPath()}
 }
 
-// startup runs when the window is ready: load settings, then start the engine.
+// startup runs when the window is ready: load settings, start the engine, and
+// install the tray icon.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.load()
 	a.startEngine()
+	tray.Start("0type — no typing allowed", a.trayOpen, a.trayQuit)
 }
 
-// shutdown stops the bundled cleanup server when the window closes.
+// shutdown stops the bundled cleanup server and removes the tray icon.
 func (a *App) shutdown(ctx context.Context) {
+	tray.Stop()
 	if a.engine != nil {
 		a.engine.Stop()
 	}
 }
 
+// beforeClose runs when the window's close button is pressed (or Quit is
+// called). Unless the user chose Quit, it hides to the tray and keeps running.
+func (a *App) beforeClose(ctx context.Context) bool {
+	if a.quitting.Load() {
+		return false // let the app actually quit
+	}
+	runtime.WindowHide(ctx)
+	return true // keep running in the tray instead
+}
+
+// trayOpen restores the window from the tray.
+func (a *App) trayOpen() {
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+}
+
+// trayQuit exits for real (past beforeClose's hide-to-tray).
+func (a *App) trayQuit() {
+	a.quitting.Store(true)
+	runtime.Quit(a.ctx)
+}
+
 // startEngine builds the dictation engine from the saved settings and starts it.
 func (a *App) startEngine() {
 	s := a.GetSettings()
-	a.engine = app.New(app.Config{Binding: s.Trigger}, nil)
+	a.engine = app.New(app.Config{
+		Binding:     s.Trigger,
+		Mode:        s.Mode,
+		InputDevice: s.InputDevice,
+		Notify:      a.notify,
+	}, nil)
 	_ = a.engine.Start()
+}
+
+// notify forwards engine messages to the frontend as a "notice" event.
+func (a *App) notify(kind, msg string) {
+	runtime.EventsEmit(a.ctx, "notice", map[string]string{"kind": kind, "msg": msg})
 }
 
 // GetSettings returns the current settings (the frontend calls this on load).
@@ -67,15 +110,32 @@ func (a *App) GetSettings() Settings {
 	return a.settings
 }
 
-// SaveSettings persists the settings edited in the window. The trigger applies
-// live via CaptureBinding; model downloads apply live via DownloadParakeet and
-// DownloadQwen.
+// SaveSettings persists the settings edited in the window and applies the mode
+// and microphone live. The trigger applies live via CaptureBinding; model
+// downloads apply live via DownloadParakeet and DownloadQwen.
 func (a *App) SaveSettings(s Settings) error {
 	a.mu.Lock()
 	a.settings = s
 	a.mu.Unlock()
+	if a.engine != nil {
+		a.engine.SetMode(s.Mode)
+		a.engine.SetInputDevice(s.InputDevice)
+	}
 	return a.save()
 }
+
+// GetVersion returns the app version for the window footer.
+func (a *App) GetVersion() string { return Version }
+
+// InputDevices lists the available microphone names ("" = system default is
+// implicit and always offered by the UI).
+func (a *App) InputDevices() []string { return audio.InputDevices() }
+
+// GetAutostart reports whether 0type launches at Windows login.
+func (a *App) GetAutostart() bool { return autostart.Enabled() }
+
+// SetAutostart enables or disables launching at Windows login.
+func (a *App) SetAutostart(on bool) error { return autostart.SetEnabled(on) }
 
 // CaptureBinding waits for the user to press any key or mouse side/middle button,
 // applies it as the trigger live, persists it, and returns the new binding.

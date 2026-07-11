@@ -1,5 +1,5 @@
 import './style.css';
-import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen, DownloadParakeet, ParakeetSupported } from '../wailsjs/go/main/App';
+import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen, DownloadParakeet, ParakeetSupported, InputDevices, GetAutostart, SetAutostart, GetVersion } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
@@ -23,12 +23,14 @@ document.querySelector('#app').innerHTML = `
       </select>
     </label>
     <label class="field">
-      <span>Language</span>
-      <select id="language">
-        <option value="auto">Auto-detect</option>
-        <option value="en">English</option>
-        <option value="sv">Svenska</option>
+      <span>Microphone</span>
+      <select id="mic">
+        <option value="">System default</option>
       </select>
+    </label>
+    <label class="field row-field">
+      <span>Start with Windows</span>
+      <input type="checkbox" id="autostart" />
     </label>
     <div class="field">
       <span>Models <em>— fully local, downloaded on demand</em></span>
@@ -38,7 +40,7 @@ document.querySelector('#app').innerHTML = `
       </div>
       <div class="bar" id="parakeet-bar"><div class="fill" id="parakeet-fill"></div></div>
       <div class="model-row">
-        <div class="model-info"><b>Qwen 3.5 4B</b> · cleanup <span id="qwen-status" class="badge">not installed</span></div>
+        <div class="model-info"><b>Qwen3-4B-Instruct</b> · cleanup <span id="qwen-status" class="badge">not installed</span></div>
         <button id="qwen-dl" class="ghost">Download</button>
       </div>
       <div class="bar" id="qwen-bar"><div class="fill" id="qwen-fill"></div></div>
@@ -46,6 +48,7 @@ document.querySelector('#app').innerHTML = `
   </main>
   <footer>
     <span id="status"></span>
+    <span id="version" class="version"></span>
     <button id="save" class="primary">Save</button>
   </footer>
 `;
@@ -77,12 +80,28 @@ function setParakeet(supported, installed) {
   else { badge.textContent = 'not installed'; badge.className = 'badge'; }
 }
 
+async function loadMics(selected) {
+  try {
+    const devices = await InputDevices();
+    const sel = $('mic');
+    sel.length = 1; // keep "System default"
+    (devices || []).forEach((name) => {
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      sel.appendChild(opt);
+    });
+    sel.value = selected || '';
+  } catch (e) { /* leave the default option */ }
+}
+
 async function load() {
   const s = await GetSettings();
   if (s.trigger && s.trigger.kind) binding = s.trigger;
   $('trigger').textContent = binding.name || 'Mouse Back';
   $('mode').value = s.mode || 'hold';
-  $('language').value = s.language || 'auto';
+  await loadMics(s.inputDevice);
+  try { $('autostart').checked = await GetAutostart(); } catch (e) { /* non-Windows */ }
+  try { $('version').textContent = 'v' + (await GetVersion()); } catch (e) { /* ignore */ }
   const m = await ModelState();
   if (m.qwen) setQwen('installed');
   setParakeet(await ParakeetSupported(), m.parakeet);
@@ -106,6 +125,12 @@ $('rebind').addEventListener('click', async () => {
     else { $('trigger').textContent = prev; }
   } catch (e) { $('trigger').textContent = prev; flash('Rebind failed: ' + e, false); }
   finally { rebind.disabled = false; }
+});
+
+$('autostart').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  try { await SetAutostart(on); flash(on ? 'Will start with Windows ✓' : 'Startup disabled'); }
+  catch (err) { e.target.checked = !on; flash('Autostart failed: ' + err, false); }
 });
 
 function wireDownload(id, fn) {
@@ -135,14 +160,15 @@ EventsOn('model-ready', (id) => {
   else if (id === 'parakeet') {
     setParakeet(true, true);
     $('parakeet-bar').classList.remove('active');
-    flash('Parakeet downloaded ✓ — restart 0type to transcribe locally');
+    flash('Parakeet ready ✓ — start dictating');
   }
 });
 
 EventsOn('model-error', (msg) => flash('Model error: ' + msg, false));
+EventsOn('notice', (n) => { if (n && n.msg) flash(n.msg, n.kind !== 'error'); });
 
 $('save').addEventListener('click', async () => {
-  const s = { trigger: binding, mode: $('mode').value, language: $('language').value };
+  const s = { trigger: binding, mode: $('mode').value, inputDevice: $('mic').value };
   try {
     await SaveSettings(s);
     flash('Saved ✓');

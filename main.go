@@ -1,6 +1,6 @@
 // Command 0type (GUI) is the windowed build: a Wails settings window backed by
-// the same dictation engine as the console cmd/0type. The window edits and
-// persists Settings; the pipeline wiring lands next.
+// the same dictation engine as the console cmd/0type. It runs in the system
+// tray, so closing the window hides it instead of quitting.
 package main
 
 import (
@@ -26,6 +26,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 18, G: 18, B: 22, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		OnBeforeClose:    app.beforeClose,
 		Bind:             []interface{}{app},
 	})
 	if err != nil {

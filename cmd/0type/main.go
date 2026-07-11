@@ -18,6 +18,7 @@ func main() {
 		GroqAPIKey: os.Getenv("GROQ_API_KEY"),
 		CleanupURL: os.Getenv("ZEROTYPE_CLEANUP_URL"),
 		Binding:    hotkey.DefaultBinding(),
+		AllowStub:  true, // console/dev: canned transcript when no key/model
 	}, func(recording bool) {
 		if recording {
 			fmt.Println("[listening] hold to speak, release to dictate...")

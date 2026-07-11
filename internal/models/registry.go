@@ -7,14 +7,16 @@ import (
 	"strings"
 )
 
-// Qwen is the cleanup model: Qwen3.5 4B, Q4_K_M GGUF (~2.7 GB), run by llama-server.
+// Qwen is the cleanup model: Qwen3-4B-Instruct-2507, Q4_K_M GGUF (~2.5 GB), run
+// by llama-server. The Instruct build has no thinking mode, so cleanup never
+// burns its token budget on a <think> trace.
 func Qwen() Asset {
 	return Asset{
 		ID:       "qwen",
-		Name:     "Qwen3.5 4B (cleanup)",
-		URL:      "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
-		Filename: "Qwen3.5-4B-Q4_K_M.gguf",
-		Bytes:    2874 * 1024 * 1024,
+		Name:     "Qwen3-4B-Instruct-2507 (cleanup)",
+		URL:      "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+		Filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+		Bytes:    2500 * 1024 * 1024,
 	}
 }
 

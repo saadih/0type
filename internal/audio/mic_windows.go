@@ -35,6 +35,8 @@ var (
 	procWaveInReset           = winmm.NewProc("waveInReset")
 	procWaveInUnprepareHeader = winmm.NewProc("waveInUnprepareHeader")
 	procWaveInClose           = winmm.NewProc("waveInClose")
+	procWaveInGetNumDevs      = winmm.NewProc("waveInGetNumDevs")
+	procWaveInGetDevCapsW     = winmm.NewProc("waveInGetDevCapsW")
 )
 
 type waveformatex struct {
@@ -58,19 +60,72 @@ type wavehdr struct {
 	reserved        uintptr
 }
 
+// waveincaps mirrors WAVEINCAPSW; szPname holds the device's display name.
+type waveincaps struct {
+	wMid           uint16
+	wPid           uint16
+	vDriverVersion uint32
+	szPname        [32]uint16
+	dwFormats      uint32
+	wChannels      uint16
+	wReserved1     uint16
+}
+
+// InputDevices lists the names of the available microphones, in winmm device
+// order. The names match what SetInputDevice expects.
+func InputDevices() []string {
+	n, _, _ := procWaveInGetNumDevs.Call()
+	names := make([]string, 0, int(n))
+	for i := uintptr(0); i < n; i++ {
+		var caps waveincaps
+		if r, _, _ := procWaveInGetDevCapsW.Call(i, uintptr(unsafe.Pointer(&caps)), unsafe.Sizeof(caps)); r == 0 {
+			names = append(names, syscall.UTF16ToString(caps.szPname[:]))
+		}
+	}
+	return names
+}
+
 // Mic records the default microphone via winmm (waveIn) with no CGO. It captures
 // into a single fixed buffer between Start and Stop — simple and robust, enough
 // for a dictation up to maxSeconds.
 type Mic struct {
-	mu  sync.Mutex
-	pin runtime.Pinner
-	hwi uintptr
-	hdr wavehdr
-	buf []byte
+	mu     sync.Mutex
+	pin    runtime.Pinner
+	hwi    uintptr
+	hdr    wavehdr
+	buf    []byte
+	device string // selected device name; "" = system default
 }
 
 // NewMic returns a winmm microphone recorder.
 func NewMic() *Mic { return &Mic{} }
+
+// SetInputDevice picks the microphone by name ("" = system default). It applies
+// on the next Start.
+func (m *Mic) SetInputDevice(name string) {
+	m.mu.Lock()
+	m.device = name
+	m.mu.Unlock()
+}
+
+// deviceID resolves the selected device name to a winmm device index, falling
+// back to WAVE_MAPPER (the default) when unset or not found. The caller holds
+// m.mu (Start does).
+func (m *Mic) deviceID() uintptr {
+	if m.device == "" {
+		return waveMapper
+	}
+	n, _, _ := procWaveInGetNumDevs.Call()
+	for i := uintptr(0); i < n; i++ {
+		var caps waveincaps
+		if r, _, _ := procWaveInGetDevCapsW.Call(i, uintptr(unsafe.Pointer(&caps)), unsafe.Sizeof(caps)); r == 0 {
+			if syscall.UTF16ToString(caps.szPname[:]) == m.device {
+				return i
+			}
+		}
+	}
+	return waveMapper
+}
 
 func mmErr(code uintptr) error {
 	if code == 0 {
@@ -97,7 +152,7 @@ func (m *Mic) Start() error {
 	}
 	var hwi uintptr
 	if r, _, _ := procWaveInOpen.Call(
-		uintptr(unsafe.Pointer(&hwi)), waveMapper,
+		uintptr(unsafe.Pointer(&hwi)), m.deviceID(),
 		uintptr(unsafe.Pointer(&wf)), callbackNull, 0, callbackNull,
 	); r != 0 {
 		return fmt.Errorf("waveInOpen: %w", mmErr(r))
