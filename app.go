@@ -67,8 +67,9 @@ func (a *App) GetSettings() Settings {
 	return a.settings
 }
 
-// SaveSettings persists the settings edited in the window. Transcription/cleanup
-// changes apply on the next launch; the trigger applies live via CaptureBinding.
+// SaveSettings persists the settings edited in the window. The trigger applies
+// live via CaptureBinding; model downloads apply live via DownloadParakeet and
+// DownloadQwen.
 func (a *App) SaveSettings(s Settings) error {
 	a.mu.Lock()
 	a.settings = s
@@ -121,20 +122,20 @@ func (a *App) DownloadQwen() error {
 		}
 	}
 	go func() {
-		if _, url, err := models.StartLlama(); err == nil {
-			if a.engine != nil {
-				a.engine.SetCleanupURL(url)
-			}
-			runtime.EventsEmit(a.ctx, "model-ready", "qwen")
-		} else {
-			runtime.EventsEmit(a.ctx, "model-error", err.Error())
+		if a.engine == nil {
+			return
 		}
+		if err := a.engine.EnableLocalCleanup(); err != nil {
+			runtime.EventsEmit(a.ctx, "model-error", err.Error())
+			return
+		}
+		runtime.EventsEmit(a.ctx, "model-ready", "qwen")
 	}()
 	return nil
 }
 
-// DownloadParakeet fetches + extracts the local transcription model. It takes
-// effect on the next launch (the model loads at startup).
+// DownloadParakeet fetches + extracts the local transcription model, then swaps
+// it into the running engine so it takes effect without a restart.
 func (a *App) DownloadParakeet() error {
 	m := models.Parakeet()
 	if !m.Installed() {
@@ -144,6 +145,14 @@ func (a *App) DownloadParakeet() error {
 	}
 	if _, err := models.ExtractParakeet(); err != nil {
 		return err
+	}
+	if a.engine != nil {
+		if err := a.engine.EnableLocalTranscription(); err != nil {
+			// Download and extract worked; only the live swap failed (e.g. a
+			// build without -tags parakeet). Keep the model, report the miss.
+			runtime.EventsEmit(a.ctx, "model-error", err.Error())
+			return nil
+		}
 	}
 	runtime.EventsEmit(a.ctx, "model-ready", "parakeet")
 	return nil

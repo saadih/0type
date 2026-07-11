@@ -4,6 +4,7 @@
 package app
 
 import (
+	"fmt"
 	"log"
 	"sync"
 
@@ -30,17 +31,24 @@ type Config struct {
 // Engine wires the dictation pipeline together and runs it.
 type Engine struct {
 	rec     audio.Recorder
-	asr     transcribe.Transcriber
 	inj     inject.Injector
 	trig    hotkey.Controller
 	onState func(recording bool)
 	events  chan bool
 	jobs    chan []byte
 
+	asrMu sync.Mutex // guards asr (hot-swapped when Parakeet is downloaded)
+	asr   transcribe.Transcriber
+
 	cleanMu    sync.Mutex // guards clean and srv
 	clean      cleanup.Cleaner
 	cleanupSet bool // an explicit cleanup URL was configured
 	srv        *models.Server
+	srvMu      sync.Mutex // serializes local cleanup-server startup
+
+	ovMu       sync.Mutex // guards the overlay state below
+	recording  bool
+	processing int // in-flight jobs being transcribed/cleaned
 }
 
 // New builds an engine from cfg. onState (may be nil) is called with true when a
@@ -102,6 +110,35 @@ func (e *Engine) cleaner() cleanup.Cleaner {
 	return e.clean
 }
 
+// transcriber returns the current transcriber under lock.
+func (e *Engine) transcriber() transcribe.Transcriber {
+	e.asrMu.Lock()
+	defer e.asrMu.Unlock()
+	return e.asr
+}
+
+// EnableLocalTranscription loads the downloaded Parakeet model and swaps the
+// transcriber in live, so a fresh download takes effect without a restart. It
+// errors if the model isn't present or this build was compiled without local
+// transcription (no -tags parakeet).
+func (e *Engine) EnableLocalTranscription() error {
+	if !models.Parakeet().Installed() {
+		return fmt.Errorf("parakeet model not installed")
+	}
+	dir, err := models.ExtractParakeet()
+	if err != nil {
+		return err
+	}
+	p, err := transcribe.NewParakeet(dir)
+	if err != nil {
+		return err // stub build: NewParakeet always errors
+	}
+	e.asrMu.Lock()
+	e.asr = p
+	e.asrMu.Unlock()
+	return nil
+}
+
 // SetCleanupURL swaps the cleanup backend live and pre-warms it.
 func (e *Engine) SetCleanupURL(url string) {
 	e.cleanMu.Lock()
@@ -115,23 +152,43 @@ func (e *Engine) SetCleanupURL(url string) {
 	go func() { _, _ = c.Clean("warm up") }()
 }
 
-// maybeStartLocalServer spins up the bundled llama-server for cleanup when the
-// Qwen model is downloaded and no explicit cleanup URL was configured.
+// EnableLocalCleanup starts the bundled llama-server for the downloaded Qwen
+// model and swaps the cleaner to it live, so a fresh download takes effect
+// without a restart. It is a no-op when an explicit cleanup URL was configured
+// or a local server is already running, and it stores the server so Stop can
+// shut it down.
+func (e *Engine) EnableLocalCleanup() error {
+	e.srvMu.Lock()
+	defer e.srvMu.Unlock()
+	e.cleanMu.Lock()
+	skip := e.cleanupSet || e.srv != nil
+	e.cleanMu.Unlock()
+	if skip {
+		return nil
+	}
+	srv, url, err := models.StartLlama()
+	if err != nil {
+		return err
+	}
+	e.cleanMu.Lock()
+	e.srv = srv
+	e.cleanMu.Unlock()
+	e.SetCleanupURL(url)
+	return nil
+}
+
+// maybeStartLocalServer brings up local cleanup at startup when the Qwen model
+// is already downloaded and no explicit cleanup URL was configured.
 func (e *Engine) maybeStartLocalServer() {
 	if e.cleanupSet || !models.Qwen().Installed() {
 		return
 	}
 	go func() {
-		srv, url, err := models.StartLlama()
-		if err != nil {
+		if err := e.EnableLocalCleanup(); err != nil {
 			log.Printf("local cleanup server: %v", err)
 			return
 		}
-		e.cleanMu.Lock()
-		e.srv = srv
-		e.cleanMu.Unlock()
-		e.SetCleanupURL(url)
-		log.Printf("local cleanup ready at %s", url)
+		log.Printf("local cleanup ready")
 	}()
 }
 
@@ -169,26 +226,63 @@ func (e *Engine) signal(press bool) {
 	}
 }
 
+// setRecording updates the recording flag and refreshes the overlay dot.
+func (e *Engine) setRecording(on bool) {
+	e.ovMu.Lock()
+	e.recording = on
+	m := e.overlayMode()
+	e.ovMu.Unlock()
+	overlay.Show(m)
+}
+
+// addProcessing adjusts the in-flight job count and refreshes the overlay dot.
+func (e *Engine) addProcessing(delta int) {
+	e.ovMu.Lock()
+	e.processing += delta
+	m := e.overlayMode()
+	e.ovMu.Unlock()
+	overlay.Show(m)
+}
+
+// overlayMode maps engine state to a dot color. Recording wins over processing,
+// so a fresh dictation shows red even while the previous one is still cleaning
+// up. Assumes ovMu is held.
+func (e *Engine) overlayMode() overlay.Mode {
+	switch {
+	case e.recording:
+		return overlay.Recording
+	case e.processing > 0:
+		return overlay.Processing
+	default:
+		return overlay.Hidden
+	}
+}
+
 func (e *Engine) run() {
 	for press := range e.events {
 		if press {
-			overlay.Show(true)
+			e.setRecording(true)
 			e.onState(true)
 			if err := e.rec.Start(); err != nil {
 				log.Printf("record start: %v", err)
 			}
 			continue
 		}
-		overlay.Show(false)
 		e.onState(false)
 		wav, err := e.rec.Stop()
 		if err != nil {
+			e.setRecording(false)
 			log.Printf("record stop: %v", err)
 			continue
 		}
 		if len(wav) < minRecordingBytes {
-			continue // too short to be speech — ignore the tap
+			e.setRecording(false) // too short to be speech — ignore the tap
+			continue
 		}
+		// Mark processing before clearing recording so the dot goes red -> blue
+		// with no hidden flicker; the output worker clears it when done.
+		e.addProcessing(1)
+		e.setRecording(false)
 		e.jobs <- wav
 	}
 }
@@ -202,7 +296,8 @@ func (e *Engine) processLoop() {
 }
 
 func (e *Engine) process(wav []byte) {
-	raw, err := e.asr.Transcribe(wav)
+	defer e.addProcessing(-1) // clear the blue dot when this job finishes
+	raw, err := e.transcriber().Transcribe(wav)
 	if err != nil {
 		log.Printf("transcribe: %v", err)
 		return

@@ -27,8 +27,9 @@ const (
 
 	lwaAlpha = 0x00000002
 
-	wmShow  = 0x8000 + 1 // WM_APP+1; wParam 1 = show, 0 = hide
-	wmTimer = 0x0113
+	wmShow       = 0x8000 + 1 // WM_APP+1; wParam carries a Mode
+	wmTimer      = 0x0113
+	wmEraseBkgnd = 0x0014
 
 	swpNoSize     = 0x0001
 	swpNoZOrder   = 0x0004
@@ -40,6 +41,16 @@ const (
 
 	dotSize      = 14 // tiny
 	cursorOffset = 16 // below-right of the pointer
+)
+
+// Mode selects what the dot shows. It travels as the wmShow wParam, so the
+// values must stay stable.
+type Mode uintptr
+
+const (
+	Hidden     Mode = 0 // not shown
+	Recording  Mode = 1 // red: the mic is live
+	Processing Mode = 2 // blue: transcribing and cleaning
 )
 
 var (
@@ -59,6 +70,9 @@ var (
 	procSetWindowRgn       = user32.NewProc("SetWindowRgn")
 	procGetCursorPos       = user32.NewProc("GetCursorPos")
 	procSetWindowPos       = user32.NewProc("SetWindowPos")
+	procInvalidateRect     = user32.NewProc("InvalidateRect")
+	procGetClientRect      = user32.NewProc("GetClientRect")
+	procFillRect           = user32.NewProc("FillRect")
 	procSetTimer           = user32.NewProc("SetTimer")
 	procKillTimer          = user32.NewProc("KillTimer")
 	procGetModuleHandleW   = kernel32.NewProc("GetModuleHandleW")
@@ -83,6 +97,8 @@ type wndclassex struct {
 
 type point struct{ x, y int32 }
 
+type rect struct{ left, top, right, bottom int32 }
+
 type msg struct {
 	hwnd    uintptr
 	message uint32
@@ -97,6 +113,12 @@ var (
 	hwnd  uintptr
 	ready = make(chan struct{})
 	tick  int
+
+	// Brushes and the currently displayed one. Only the overlay's own OS thread
+	// touches curBrush (set in wndProc, read in WM_ERASEBKGND), so no lock.
+	redBrush  uintptr
+	blueBrush uintptr
+	curBrush  uintptr
 )
 
 // rgb builds a COLORREF (0x00BBGGRR).
@@ -111,16 +133,13 @@ func Start() {
 	})
 }
 
-// Show shows (recording) or hides the dot. Safe to call from any goroutine.
-func Show(recording bool) {
+// Show sets the dot's mode (hidden, red recording, or blue processing). Safe to
+// call from any goroutine.
+func Show(m Mode) {
 	if hwnd == 0 {
 		return
 	}
-	var w uintptr
-	if recording {
-		w = 1
-	}
-	procPostMessageW.Call(hwnd, wmShow, w, 0)
+	procPostMessageW.Call(hwnd, wmShow, uintptr(m), 0)
 }
 
 // moveToCursor places the dot just below-right of the pointer.
@@ -134,16 +153,27 @@ func moveToCursor(h uintptr, insertAfter, flags uintptr) {
 func wndProc(h, message, wParam, lParam uintptr) uintptr {
 	switch message {
 	case wmShow:
-		if wParam == 1 {
-			tick = 0
-			moveToCursor(h, ^uintptr(0), swpNoSize|swpNoActivate|swpShowWindow) // HWND_TOPMOST
-			procSetLayeredAttrs.Call(h, 0, 235, lwaAlpha)
-			procSetTimer.Call(h, followTimerID, followMs, 0)
-		} else {
+		if Mode(wParam) == Hidden {
 			procKillTimer.Call(h, followTimerID)
 			procShowWindow.Call(h, swHide)
+			return 0
 		}
+		if Mode(wParam) == Processing {
+			curBrush = blueBrush
+		} else {
+			curBrush = redBrush
+		}
+		tick = 0
+		moveToCursor(h, ^uintptr(0), swpNoSize|swpNoActivate|swpShowWindow) // HWND_TOPMOST
+		procSetLayeredAttrs.Call(h, 0, 235, lwaAlpha)
+		procInvalidateRect.Call(h, 0, 1) // erase + repaint in the new color
+		procSetTimer.Call(h, followTimerID, followMs, 0)
 		return 0
+	case wmEraseBkgnd:
+		var rc rect
+		procGetClientRect.Call(h, uintptr(unsafe.Pointer(&rc)))
+		procFillRect.Call(wParam, uintptr(unsafe.Pointer(&rc)), curBrush) // wParam is the HDC
+		return 1
 	case wmTimer:
 		moveToCursor(h, 0, swpNoSize|swpNoActivate|swpNoZOrder)
 		// Breathing flair: triangle-wave alpha over ~1.2s.
@@ -166,12 +196,14 @@ func run() {
 
 	hInst, _, _ := procGetModuleHandleW.Call(0)
 	className, _ := syscall.UTF16PtrFromString("ZeroTypeOverlay")
-	brush, _, _ := procCreateSolidBrush.Call(rgb(235, 66, 66)) // recording red
+	redBrush, _, _ = procCreateSolidBrush.Call(rgb(235, 66, 66))   // recording
+	blueBrush, _, _ = procCreateSolidBrush.Call(rgb(59, 130, 246)) // processing
+	curBrush = redBrush
 
 	wc := wndclassex{
 		lpfnWndProc:   syscall.NewCallback(wndProc),
 		hInstance:     hInst,
-		hbrBackground: brush,
+		hbrBackground: redBrush,
 		lpszClassName: className,
 	}
 	wc.cbSize = uint32(unsafe.Sizeof(wc))
