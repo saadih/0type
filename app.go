@@ -18,7 +18,7 @@ import (
 )
 
 // Version is the app version shown in the window footer. Bump it per release.
-const Version = "0.1.1"
+const Version = "0.1.2"
 
 // Settings is the user-facing configuration edited in the window and persisted
 // to the OS config dir (%APPDATA%\0type\config.json on Windows).
