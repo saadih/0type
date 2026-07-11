@@ -1,5 +1,5 @@
 import './style.css';
-import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen } from '../wailsjs/go/main/App';
+import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen, DownloadParakeet, ParakeetSupported } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
@@ -33,17 +33,18 @@ document.querySelector('#app').innerHTML = `
     <div class="field">
       <span>Models <em>— fully local, downloaded on demand</em></span>
       <div class="model-row">
+        <div class="model-info"><b>Parakeet v3</b> · transcription <span id="parakeet-status" class="badge">…</span></div>
+        <button id="parakeet-dl" class="ghost" disabled>Download</button>
+      </div>
+      <div class="bar" id="parakeet-bar"><div class="fill" id="parakeet-fill"></div></div>
+      <div class="model-row">
         <div class="model-info"><b>Qwen 3.5 4B</b> · cleanup <span id="qwen-status" class="badge">not installed</span></div>
         <button id="qwen-dl" class="ghost">Download</button>
       </div>
       <div class="bar" id="qwen-bar"><div class="fill" id="qwen-fill"></div></div>
-      <div class="model-row">
-        <div class="model-info"><b>Parakeet v3</b> · transcription <span class="badge soon">soon</span></div>
-        <button class="ghost" disabled>Download</button>
-      </div>
     </div>
     <label class="field">
-      <span>Groq API key <em>— cloud transcription</em></span>
+      <span>Groq API key <em>— cloud transcription fallback</em></span>
       <input id="groq" type="password" placeholder="gsk_..." autocomplete="off"/>
     </label>
     <label class="field">
@@ -69,8 +70,18 @@ function human(n) {
 
 function setQwen(state) {
   const badge = $('qwen-status');
-  if (state === 'installed') { badge.textContent = 'installed'; badge.className = 'badge installed'; $('qwen-dl').textContent = 'Re-download'; }
-  else if (state === 'ready') { badge.textContent = 'ready'; badge.className = 'badge ready'; $('qwen-bar').classList.remove('active'); }
+  if (state === 'installed' || state === 'ready') {
+    badge.textContent = state; badge.className = 'badge installed';
+    $('qwen-dl').textContent = 'Re-download'; $('qwen-dl').disabled = false;
+    $('qwen-bar').classList.remove('active');
+  } else { badge.textContent = 'not installed'; badge.className = 'badge'; }
+}
+
+function setParakeet(supported, installed) {
+  const badge = $('parakeet-status'); const btn = $('parakeet-dl');
+  if (!supported) { badge.textContent = 'not in this build'; badge.className = 'badge soon'; btn.disabled = true; return; }
+  btn.disabled = false;
+  if (installed) { badge.textContent = 'installed'; badge.className = 'badge installed'; btn.textContent = 'Re-download'; }
   else { badge.textContent = 'not installed'; badge.className = 'badge'; }
 }
 
@@ -84,13 +95,14 @@ async function load() {
   $('cleanup').value = s.cleanupUrl || '';
   const m = await ModelState();
   if (m.qwen) setQwen('installed');
+  setParakeet(await ParakeetSupported(), m.parakeet);
 }
 
 function flash(msg, ok = true) {
   const el = $('status');
   el.textContent = msg;
   el.style.color = ok ? 'var(--accent)' : '#f87171';
-  setTimeout(() => { el.textContent = ''; }, 2600);
+  setTimeout(() => { el.textContent = ''; }, 3200);
 }
 
 $('rebind').addEventListener('click', async () => {
@@ -102,50 +114,42 @@ $('rebind').addEventListener('click', async () => {
     const b = await CaptureBinding();
     if (b && b.kind) { binding = b; $('trigger').textContent = b.name; flash('Bound to ' + b.name); }
     else { $('trigger').textContent = prev; }
-  } catch (e) {
-    $('trigger').textContent = prev;
-    flash('Rebind failed: ' + e, false);
-  } finally {
-    rebind.disabled = false;
-  }
+  } catch (e) { $('trigger').textContent = prev; flash('Rebind failed: ' + e, false); }
+  finally { rebind.disabled = false; }
 });
 
-$('qwen-dl').addEventListener('click', async () => {
-  const btn = $('qwen-dl');
-  btn.disabled = true;
-  btn.textContent = 'Downloading…';
-  $('qwen-bar').classList.add('active');
-  try {
-    await DownloadQwen(); // resolves when the ~2.7GB fetch is done; server start is async
-    btn.textContent = 'Starting…';
-  } catch (e) {
-    flash('Download failed: ' + e, false);
-    btn.textContent = 'Download';
-    btn.disabled = false;
-    $('qwen-bar').classList.remove('active');
-  }
-});
+function wireDownload(id, fn) {
+  $(id + '-dl').addEventListener('click', async () => {
+    const btn = $(id + '-dl');
+    btn.disabled = true; btn.textContent = 'Downloading…';
+    $(id + '-bar').classList.add('active');
+    try { await fn(); }
+    catch (e) { flash('Download failed: ' + e, false); btn.textContent = 'Download'; btn.disabled = false; $(id + '-bar').classList.remove('active'); }
+  });
+}
+wireDownload('qwen', DownloadQwen);
+wireDownload('parakeet', DownloadParakeet);
 
 EventsOn('download-progress', (p) => {
-  if (!p || p.id !== 'qwen') return;
+  if (!p) return;
+  const fill = $(p.id + '-fill');
+  if (!fill) return;
   const pct = p.total > 0 ? Math.min(100, (p.done / p.total) * 100) : 0;
-  $('qwen-fill').style.width = pct + '%';
-  $('qwen-dl').textContent = human(p.done) + (p.total > 0 ? ' / ' + human(p.total) : '');
+  fill.style.width = pct + '%';
+  const btn = $(p.id + '-dl');
+  if (btn) btn.textContent = human(p.done) + (p.total > 0 ? ' / ' + human(p.total) : '');
 });
 
-EventsOn('model-ready', () => {
-  setQwen('ready');
-  $('qwen-dl').disabled = false;
-  $('qwen-dl').textContent = 'Re-download';
-  flash('Local cleanup is ready ✓');
+EventsOn('model-ready', (id) => {
+  if (id === 'qwen') { setQwen('ready'); flash('Local cleanup is ready ✓'); }
+  else if (id === 'parakeet') {
+    setParakeet(true, true);
+    $('parakeet-bar').classList.remove('active');
+    flash('Parakeet downloaded ✓ — restart 0type to transcribe locally');
+  }
 });
 
-EventsOn('model-error', (msg) => {
-  flash('Model error: ' + msg, false);
-  $('qwen-dl').disabled = false;
-  $('qwen-dl').textContent = 'Download';
-  $('qwen-bar').classList.remove('active');
-});
+EventsOn('model-error', (msg) => flash('Model error: ' + msg, false));
 
 $('save').addEventListener('click', async () => {
   const s = {
@@ -158,9 +162,7 @@ $('save').addEventListener('click', async () => {
   try {
     await SaveSettings(s);
     flash('Saved ✓ — restart 0type to apply key/URL changes');
-  } catch (e) {
-    flash('Error: ' + e, false);
-  }
+  } catch (e) { flash('Error: ' + e, false); }
 });
 
 load();

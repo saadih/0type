@@ -139,6 +139,26 @@ func (a *App) DownloadQwen() error {
 	return nil
 }
 
+// DownloadParakeet fetches + extracts the local transcription model. It takes
+// effect on the next launch (the model loads at startup).
+func (a *App) DownloadParakeet() error {
+	m := models.Parakeet()
+	if !m.Installed() {
+		if err := models.Download(m, a.progress("parakeet")); err != nil {
+			return err
+		}
+	}
+	if _, err := models.ExtractParakeet(); err != nil {
+		return err
+	}
+	runtime.EventsEmit(a.ctx, "model-ready", "parakeet")
+	return nil
+}
+
+// ParakeetSupported reports whether this build includes local transcription
+// (built with -tags parakeet).
+func (a *App) ParakeetSupported() bool { return parakeetSupported }
+
 func (a *App) progress(id string) func(done, total int64) {
 	return func(done, total int64) {
 		runtime.EventsEmit(a.ctx, "download-progress", map[string]any{"id": id, "done": done, "total": total})
