@@ -65,6 +65,38 @@ input:focus, select:focus { border-color: var(--accent); }
   font-family: ui-monospace, "Cascadia Code", monospace;
 }
 
+.model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
+.model-info { font-size: 13px; color: var(--text); }
+.model-info b { font-weight: 700; }
+.badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--line);
+  color: var(--muted);
+  margin-left: 6px;
+}
+.badge.installed, .badge.ready { background: rgba(110, 231, 183, 0.16); color: var(--accent); }
+.badge.soon { opacity: 0.6; }
+.bar {
+  height: 5px;
+  background: var(--panel);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 2px 0;
+  display: none;
+}
+.bar.active { display: block; }
+.fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.2s ease; }
+
 button {
   font: inherit;
   border-radius: 8px;

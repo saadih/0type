@@ -9,6 +9,8 @@ import (
 
 	"github.com/saadih/0type/internal/app"
 	"github.com/saadih/0type/internal/hotkey"
+	"github.com/saadih/0type/internal/models"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Settings is the user-facing configuration edited in the window and persisted
@@ -46,8 +48,14 @@ func (a *App) startup(ctx context.Context) {
 	a.startEngine()
 }
 
+// shutdown stops the bundled cleanup server when the window closes.
+func (a *App) shutdown(ctx context.Context) {
+	if a.engine != nil {
+		a.engine.Stop()
+	}
+}
+
 // startEngine builds the dictation engine from the saved settings and starts it.
-// The recording indicator is a floating overlay driven by the engine itself.
 func (a *App) startEngine() {
 	s := a.GetSettings()
 	a.engine = app.New(app.Config{
@@ -89,6 +97,52 @@ func (a *App) CaptureBinding() (hotkey.Binding, error) {
 	a.mu.Unlock()
 	_ = a.save()
 	return b, nil
+}
+
+// ModelState reports which downloadable models are installed.
+func (a *App) ModelState() map[string]bool {
+	return map[string]bool{
+		"qwen":     models.Qwen().Installed(),
+		"parakeet": models.Parakeet().Installed(),
+	}
+}
+
+// DownloadQwen fetches the cleanup model + the llama-server binary (progress is
+// emitted as "download-progress" events), then starts local cleanup and emits
+// "model-ready". Runs on a Wails goroutine, so it may block on the ~2.7GB fetch.
+func (a *App) DownloadQwen() error {
+	server, err := models.LlamaServer()
+	if err != nil {
+		return err
+	}
+	if !server.Installed() {
+		if err := models.Download(server, a.progress("qwen")); err != nil {
+			return err
+		}
+	}
+	gguf := models.Qwen()
+	if !gguf.Installed() {
+		if err := models.Download(gguf, a.progress("qwen")); err != nil {
+			return err
+		}
+	}
+	go func() {
+		if _, url, err := models.StartLlama(); err == nil {
+			if a.engine != nil {
+				a.engine.SetCleanupURL(url)
+			}
+			runtime.EventsEmit(a.ctx, "model-ready", "qwen")
+		} else {
+			runtime.EventsEmit(a.ctx, "model-error", err.Error())
+		}
+	}()
+	return nil
+}
+
+func (a *App) progress(id string) func(done, total int64) {
+	return func(done, total int64) {
+		runtime.EventsEmit(a.ctx, "download-progress", map[string]any{"id": id, "done": done, "total": total})
+	}
 }
 
 func configPath() string {

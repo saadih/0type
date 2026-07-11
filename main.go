@@ -19,12 +19,13 @@ func main() {
 	err := wails.Run(&options.App{
 		Title:            "0type",
 		Width:            480,
-		Height:           620,
+		Height:           720,
 		MinWidth:         420,
-		MinHeight:        520,
+		MinHeight:        560,
 		AssetServer:      &assetserver.Options{Assets: assets},
 		BackgroundColour: &options.RGBA{R: 18, G: 18, B: 22, A: 1},
 		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
 		Bind:             []interface{}{app},
 	})
 	if err != nil {

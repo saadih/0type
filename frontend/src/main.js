@@ -1,5 +1,6 @@
 import './style.css';
-import { GetSettings, SaveSettings, CaptureBinding } from '../wailsjs/go/main/App';
+import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen } from '../wailsjs/go/main/App';
+import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
   <header>
@@ -29,12 +30,24 @@ document.querySelector('#app').innerHTML = `
         <option value="sv">Svenska</option>
       </select>
     </label>
+    <div class="field">
+      <span>Models <em>— fully local, downloaded on demand</em></span>
+      <div class="model-row">
+        <div class="model-info"><b>Qwen 3.5 4B</b> · cleanup <span id="qwen-status" class="badge">not installed</span></div>
+        <button id="qwen-dl" class="ghost">Download</button>
+      </div>
+      <div class="bar" id="qwen-bar"><div class="fill" id="qwen-fill"></div></div>
+      <div class="model-row">
+        <div class="model-info"><b>Parakeet v3</b> · transcription <span class="badge soon">soon</span></div>
+        <button class="ghost" disabled>Download</button>
+      </div>
+    </div>
     <label class="field">
       <span>Groq API key <em>— cloud transcription</em></span>
       <input id="groq" type="password" placeholder="gsk_..." autocomplete="off"/>
     </label>
     <label class="field">
-      <span>Cleanup server URL <em>— local LLM</em></span>
+      <span>Cleanup server URL <em>— override the bundled one</em></span>
       <input id="cleanup" type="text" placeholder="http://127.0.0.1:8719" autocomplete="off"/>
     </label>
   </main>
@@ -48,6 +61,19 @@ const $ = (id) => document.getElementById(id);
 
 let binding = { kind: 'mouse', code: 4, name: 'Mouse Back' };
 
+function human(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
+  if (n >= 1e6) return (n / 1e6).toFixed(0) + ' MB';
+  return (n / 1e3).toFixed(0) + ' KB';
+}
+
+function setQwen(state) {
+  const badge = $('qwen-status');
+  if (state === 'installed') { badge.textContent = 'installed'; badge.className = 'badge installed'; $('qwen-dl').textContent = 'Re-download'; }
+  else if (state === 'ready') { badge.textContent = 'ready'; badge.className = 'badge ready'; $('qwen-bar').classList.remove('active'); }
+  else { badge.textContent = 'not installed'; badge.className = 'badge'; }
+}
+
 async function load() {
   const s = await GetSettings();
   if (s.trigger && s.trigger.kind) binding = s.trigger;
@@ -56,6 +82,8 @@ async function load() {
   $('language').value = s.language || 'auto';
   $('groq').value = s.groqApiKey || '';
   $('cleanup').value = s.cleanupUrl || '';
+  const m = await ModelState();
+  if (m.qwen) setQwen('installed');
 }
 
 function flash(msg, ok = true) {
@@ -71,21 +99,52 @@ $('rebind').addEventListener('click', async () => {
   $('trigger').textContent = 'Press any key or button…';
   rebind.disabled = true;
   try {
-    // CaptureBinding blocks until you press something, then applies + saves it.
     const b = await CaptureBinding();
-    if (b && b.kind) {
-      binding = b;
-      $('trigger').textContent = b.name;
-      flash('Bound to ' + b.name);
-    } else {
-      $('trigger').textContent = prev;
-    }
+    if (b && b.kind) { binding = b; $('trigger').textContent = b.name; flash('Bound to ' + b.name); }
+    else { $('trigger').textContent = prev; }
   } catch (e) {
     $('trigger').textContent = prev;
     flash('Rebind failed: ' + e, false);
   } finally {
     rebind.disabled = false;
   }
+});
+
+$('qwen-dl').addEventListener('click', async () => {
+  const btn = $('qwen-dl');
+  btn.disabled = true;
+  btn.textContent = 'Downloading…';
+  $('qwen-bar').classList.add('active');
+  try {
+    await DownloadQwen(); // resolves when the ~2.7GB fetch is done; server start is async
+    btn.textContent = 'Starting…';
+  } catch (e) {
+    flash('Download failed: ' + e, false);
+    btn.textContent = 'Download';
+    btn.disabled = false;
+    $('qwen-bar').classList.remove('active');
+  }
+});
+
+EventsOn('download-progress', (p) => {
+  if (!p || p.id !== 'qwen') return;
+  const pct = p.total > 0 ? Math.min(100, (p.done / p.total) * 100) : 0;
+  $('qwen-fill').style.width = pct + '%';
+  $('qwen-dl').textContent = human(p.done) + (p.total > 0 ? ' / ' + human(p.total) : '');
+});
+
+EventsOn('model-ready', () => {
+  setQwen('ready');
+  $('qwen-dl').disabled = false;
+  $('qwen-dl').textContent = 'Re-download';
+  flash('Local cleanup is ready ✓');
+});
+
+EventsOn('model-error', (msg) => {
+  flash('Model error: ' + msg, false);
+  $('qwen-dl').disabled = false;
+  $('qwen-dl').textContent = 'Download';
+  $('qwen-bar').classList.remove('active');
 });
 
 $('save').addEventListener('click', async () => {
