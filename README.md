@@ -34,13 +34,15 @@ You download the models from HuggingFace and GitHub releases into `%LOCALAPPDATA
 
 > Windows 10/11 (x64). The module compiles on other platforms, but the hook, audio, and overlay only work on Windows.
 
-Build it (see [Build from source](#build-from-source)), then:
+Download the [latest release](https://github.com/saadih/0type/releases/latest), unzip it, and keep the DLLs next to `0type.exe`. Then:
 
 1. Run `0type.exe`.
 2. Open Models and download Parakeet (about 600 MB) and Qwen (about 2.7 GB).
 3. Restart. Hold your mouse back button (MB4), speak, and release.
 
 The dot trails your cursor while you talk; the text lands where you were typing. Rebind the trigger to whatever you want in settings.
+
+Windows may warn on first launch because the build isn't signed. Click More info, then Run anyway. To build it yourself instead, see [Build from source](#build-from-source).
 
 ## Build from source
 
