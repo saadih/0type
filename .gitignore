@@ -21,6 +21,10 @@
 !/frontend/dist/.gitkeep
 /frontend/wailsjs/
 
+# Wails NSIS installer: generated tools + downloaded WebView2 bootstrapper
+/build/windows/installer/wails_tools.nsh
+/build/windows/installer/tmp/
+
 # OS / editor
 .DS_Store
 Thumbs.db

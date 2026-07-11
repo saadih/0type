@@ -34,15 +34,17 @@ You download the models from HuggingFace and GitHub releases into `%LOCALAPPDATA
 
 > Windows 10/11 (x64). The module compiles on other platforms, but the hook, audio, and overlay only work on Windows.
 
-Download the [latest release](https://github.com/saadih/0type/releases/latest), unzip it, and keep the DLLs next to `0type.exe`. Then:
+Download the [latest release](https://github.com/saadih/0type/releases/latest) and run **`0type-amd64-installer.exe`**. It installs for your user (no admin), adds a Start Menu shortcut, and checks for the WebView2 runtime. Prefer no installer? Grab the portable `.zip` from the same page and keep the DLLs next to `0type.exe`.
 
-1. Run `0type.exe`.
-2. Open Models and download Parakeet (about 600 MB) and Qwen (about 2.7 GB).
-3. Restart. Hold your mouse back button (MB4), speak, and release.
+Then:
 
-The dot trails your cursor while you talk; the text lands where you were typing. Rebind the trigger to whatever you want in settings.
+1. Launch 0type.
+2. Open Models and download Parakeet (about 600 MB) and Qwen (about 2.5 GB).
+3. Hold your mouse back button (MB4), speak, and release.
 
-Windows may warn on first launch because the build isn't signed. Click More info, then Run anyway. To build it yourself instead, see [Build from source](#build-from-source).
+The dot trails your cursor while you talk, red while recording and blue while it works; the text lands where you were typing. Rebind the trigger to whatever you want, and close the window to tuck 0type into the tray.
+
+Windows may warn on first launch because the build isn't signed. Click More info, then Run anyway. To build it yourself, see [Build from source](#build-from-source).
 
 ## Build from source
 
@@ -53,7 +55,7 @@ You need:
 - WebView2 (ships with Windows 11)
 - A C toolchain, for the local Parakeet build only: `winget install BrechtSanders.WinLibs.POSIX.UCRT`, then reopen your terminal
 
-Two builds:
+Three builds:
 
 ```powershell
 # CGO-free, no local transcription (dev/CI, or a cloud fallback)
@@ -61,9 +63,12 @@ wails build
 
 # Local Parakeet transcription (CGO + sherpa-onnx), copies its DLLs
 pwsh scripts/build-parakeet.ps1
+
+# The single-file per-user installer (needs NSIS: winget install NSIS.NSIS)
+pwsh scripts/build-installer.ps1
 ```
 
-Both write `build\bin\0type.exe`. The Parakeet build also drops `onnxruntime.dll` and `sherpa-onnx-c-api.dll` next to it. To test the pipeline headless, run `go run ./cmd/0type`.
+The first two write `build\bin\0type.exe`; the Parakeet build also drops the sherpa DLLs next to it. The installer script produces `build\bin\0type-amd64-installer.exe`. To test the pipeline headless, run `go run ./cmd/0type`.
 
 ## Configure
 

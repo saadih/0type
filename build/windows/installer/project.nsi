@@ -96,6 +96,11 @@ Section
 
     !insertmacro wails.files
 
+    # Parakeet's native runtime: these must sit next to the exe (loaded at start).
+    File "..\..\bin\onnxruntime.dll"
+    File "..\..\bin\sherpa-onnx-c-api.dll"
+    File "..\..\bin\sherpa-onnx-cxx-api.dll"
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 

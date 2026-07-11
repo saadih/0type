@@ -8,5 +8,12 @@
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "saadih"
+  },
+  "info": {
+    "companyName": "Hussein Al-Saadi",
+    "productName": "0type",
+    "productVersion": "0.1.1",
+    "copyright": "(C) 2026 Hussein Al-Saadi. MIT.",
+    "comments": "Push-to-talk dictation that runs on your machine."
   }
 }
