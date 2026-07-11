@@ -43,14 +43,6 @@ document.querySelector('#app').innerHTML = `
       </div>
       <div class="bar" id="qwen-bar"><div class="fill" id="qwen-fill"></div></div>
     </div>
-    <label class="field">
-      <span>Groq API key <em>— cloud transcription fallback</em></span>
-      <input id="groq" type="password" placeholder="gsk_..." autocomplete="off"/>
-    </label>
-    <label class="field">
-      <span>Cleanup server URL <em>— override the bundled one</em></span>
-      <input id="cleanup" type="text" placeholder="http://127.0.0.1:8719" autocomplete="off"/>
-    </label>
   </main>
   <footer>
     <span id="status"></span>
@@ -91,8 +83,6 @@ async function load() {
   $('trigger').textContent = binding.name || 'Mouse Back';
   $('mode').value = s.mode || 'hold';
   $('language').value = s.language || 'auto';
-  $('groq').value = s.groqApiKey || '';
-  $('cleanup').value = s.cleanupUrl || '';
   const m = await ModelState();
   if (m.qwen) setQwen('installed');
   setParakeet(await ParakeetSupported(), m.parakeet);
@@ -152,16 +142,10 @@ EventsOn('model-ready', (id) => {
 EventsOn('model-error', (msg) => flash('Model error: ' + msg, false));
 
 $('save').addEventListener('click', async () => {
-  const s = {
-    trigger: binding,
-    mode: $('mode').value,
-    language: $('language').value,
-    groqApiKey: $('groq').value,
-    cleanupUrl: $('cleanup').value,
-  };
+  const s = { trigger: binding, mode: $('mode').value, language: $('language').value };
   try {
     await SaveSettings(s);
-    flash('Saved ✓ — restart 0type to apply key/URL changes');
+    flash('Saved ✓');
   } catch (e) { flash('Error: ' + e, false); }
 });
 

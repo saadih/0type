@@ -16,11 +16,9 @@ import (
 // Settings is the user-facing configuration edited in the window and persisted
 // to the OS config dir (%APPDATA%\0type\config.json on Windows).
 type Settings struct {
-	Trigger    hotkey.Binding `json:"trigger"`
-	Mode       string         `json:"mode"`       // "hold" | "toggle"
-	Language   string         `json:"language"`   // "auto" | "en" | "sv"
-	GroqAPIKey string         `json:"groqApiKey"` // cloud transcription (optional)
-	CleanupURL string         `json:"cleanupUrl"` // local LLM base URL (optional)
+	Trigger  hotkey.Binding `json:"trigger"`
+	Mode     string         `json:"mode"`     // "hold" | "toggle"
+	Language string         `json:"language"` // "auto" | "en" | "sv"
 }
 
 func defaultSettings() Settings {
@@ -58,11 +56,7 @@ func (a *App) shutdown(ctx context.Context) {
 // startEngine builds the dictation engine from the saved settings and starts it.
 func (a *App) startEngine() {
 	s := a.GetSettings()
-	a.engine = app.New(app.Config{
-		GroqAPIKey: s.GroqAPIKey,
-		CleanupURL: s.CleanupURL,
-		Binding:    s.Trigger,
-	}, nil)
+	a.engine = app.New(app.Config{Binding: s.Trigger}, nil)
 	_ = a.engine.Start()
 }
 
