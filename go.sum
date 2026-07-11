@@ -16,6 +16,14 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e h1:Q3+PugElBCf4PFpxhErSzU3/PY5sFL5Z6rfv4AbGAck=
 github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e/go.mod h1:alcuEEnZsY1WQsagKhZDsoPCRoOijYqhZvPwLG0kzVs=
+github.com/k2-fsa/sherpa-onnx-go v1.13.4 h1:Wu+UTUZTgtOhbCSNxhTHs9vX512gRYJtpX0H0GBA9fA=
+github.com/k2-fsa/sherpa-onnx-go v1.13.4/go.mod h1:TgfGAQGgtrok0kkX5d67sjp0AiNF6EwcVTPvJdYJ8BI=
+github.com/k2-fsa/sherpa-onnx-go-linux v1.13.4 h1:FpEUVeTtdkUlb+YToY8rCWFmvB+zT70YKIKdvnDWIzU=
+github.com/k2-fsa/sherpa-onnx-go-linux v1.13.4/go.mod h1:NXEH2rsBgTdqY59YpPq6CtSBlBAXy/8a9FmpLERU97I=
+github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4 h1:HBQA7U5vpgIA51CUCtnEdN+LmoMlZp84r8ILnmiqtVM=
+github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4/go.mod h1:ZOhUAXC62Unj0ZNfu6zxSFKcW96aXf7P3BsqiUyOBbE=
+github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4 h1:FFHlCnTwB2H7X4OUAQwRfeFqU0aV5yOeEvpJAS0G75s=
+github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4/go.mod h1:5AX7TU8+P/gInjglY1ijtWUM2b8iyR0QX4yEngzMe64=
 github.com/labstack/echo/v4 v4.13.3 h1:pwhpCPrTl5qry5HRdM5FwdXnhXSLSY+WE+YQSeCaafY=
 github.com/labstack/echo/v4 v4.13.3/go.mod h1:o90YNEeQWjDozo584l7AwhJMHN0bOC4tAfg+Xox9q5g=
 github.com/labstack/gommon v0.4.2 h1:F8qTUNXgG1+6WQmqoUWnz8WiEU60mXVVw0P4ht1WRA0=

@@ -51,6 +51,15 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 	if cfg.GroqAPIKey != "" {
 		asr = transcribe.NewGroq(cfg.GroqAPIKey)
 	}
+	// Prefer local Parakeet when the model is downloaded and it's compiled in
+	// (built with -tags parakeet); NewParakeet errors on the stub build.
+	if models.Parakeet().Installed() {
+		if dir, err := models.ExtractParakeet(); err == nil {
+			if p, err := transcribe.NewParakeet(dir); err == nil {
+				asr = p
+			}
+		}
+	}
 	var clean cleanup.Cleaner = cleanup.NewNoop()
 	if cfg.CleanupURL != "" {
 		clean = cleanup.NewLLM(cfg.CleanupURL)
