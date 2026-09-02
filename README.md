@@ -74,20 +74,22 @@ The first two write `build\bin\0type.exe`; the Parakeet build also drops the she
 
 ## Configure
 
+The main screen holds what you touch while dictating:
+
 - **Trigger:** click Rebind, then press any key or mouse button. Pick something you don't type, like an F-key, a side button, Right Ctrl, or Caps Lock.
+- **Transcription** and **Cleanup:** local or OpenRouter. A local option appears once its model is downloaded in Settings. Cloud needs one [OpenRouter API key](https://openrouter.ai/keys) for both; audio and transcripts then leave your machine. Each cloud model field has a Recommended picker fed by [OpenRouter's rankings](https://openrouter.ai/rankings) (best value, fastest, smartest for cleanup; the three most used for transcription), refreshed daily and available offline from a bundled copy.
+- **About you:** a short note to the cleanup model. Names and words to spell right, preferences to follow. Sent with every cleanup request, so it goes to OpenRouter when cleanup is in the cloud.
+
+Settings (top right) holds the rest:
+
 - **Mode:** hold to talk, or tap to toggle.
 - **Output:** paste as you speak (each pause becomes a paste), or paste once when you stop.
 - **Microphone:** use the system default or pick a specific input device.
-- **Settings** (top right): start with Windows, and your own OpenRouter model slugs, which appear first in the Recommended pickers.
-- **Transcription:** local Parakeet, or a speech-to-text model on OpenRouter (default `openai/whisper-large-v3-turbo`). Audio goes to OpenRouter.
-- **Cleanup:** local Qwen, or a chat model on OpenRouter (default `anthropic/claude-haiku-4.5`). Transcripts go to OpenRouter. Bigger models are better at working out what you meant when the recognizer mishears a word.
-- **OpenRouter API key:** one [key](https://openrouter.ai/keys) serves both cloud options.
-- **Recommended models:** each model field has a picker fed by [OpenRouter's rankings](https://openrouter.ai/rankings): best value, fastest, and smartest for cleanup; the three most used for transcription. It refreshes itself once a day and works offline from a bundled copy.
+- **Start with Windows:** launch 0type at login.
 - **Models:** download or re-download Parakeet and Qwen.
+- **My models:** your own OpenRouter slugs, listed first in the Recommended pickers.
 
 Keys are saved in `%APPDATA%\0type\config.json`, readable only by your Windows account.
-
-Closing the window hides 0type to the system tray, where it keeps listening. Right-click the tray icon for Open or Quit.
 
 ## How it's built
 

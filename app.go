@@ -41,11 +41,19 @@ type Settings struct {
 	Cleaner      string `json:"cleaner"`      // "local" (Qwen, default) | "openrouter"
 	CleanupModel string `json:"cleanupModel"` // "" = cleanup.DefaultCloudModel
 
+	// Notes is the user's note to the cleanup model: names and jargon to spell
+	// right, preferences to follow.
+	Notes string `json:"notes"`
+
 	// The user's own OpenRouter model slugs, listed first in the Recommended
 	// pickers (settings page).
 	MyTranscriptionModels []string `json:"myTranscriptionModels"`
 	MyCleanupModels       []string `json:"myCleanupModels"`
 }
+
+// maxNotes bounds the About-you note so it always fits the local model's 4k
+// context next to the prompt and a transcript chunk (roughly 400 tokens).
+const maxNotes = 1500
 
 func defaultSettings() Settings {
 	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold", Output: "live", Transcriber: "local", Cleaner: "local"}
@@ -59,7 +67,10 @@ func (s Settings) live() bool { return s.Output != "end" }
 // silently falls back to local.
 func (s Settings) validate() error {
 	if (s.Transcriber == "openrouter" || s.Cleaner == "openrouter") && s.OpenRouterKey == "" {
-		return fmt.Errorf("enter an OpenRouter API key, or switch back to local")
+		return fmt.Errorf("enter an OpenRouter API key, or download a local model in Settings")
+	}
+	if len(s.Notes) > maxNotes {
+		return fmt.Errorf("keep About you under %d characters; it rides along with every request", maxNotes)
 	}
 	return nil
 }
@@ -127,6 +138,7 @@ func (a *App) startEngine() {
 		TranscriptionModel: s.TranscriptionModel,
 		Cleanup:            s.Cleaner,
 		CleanupModel:       s.CleanupModel,
+		Notes:              s.Notes,
 		Live:               s.live(),
 		Binding:            s.Trigger,
 		Mode:               s.Mode,
@@ -180,6 +192,7 @@ func (a *App) SaveSettings(s Settings) error {
 		a.engine.SetInputDevice(s.InputDevice)
 		a.engine.SetLive(s.live())
 		a.engine.SetTranscription(s.Transcriber, s.OpenRouterKey, s.TranscriptionModel)
+		a.engine.SetNotes(s.Notes)
 		a.engine.SetCleanup(s.Cleaner, s.OpenRouterKey, s.CleanupModel)
 	}
 	return a.save()

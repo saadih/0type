@@ -46,6 +46,9 @@ type Config struct {
 	Cleanup      string
 	CleanupModel string
 	CleanupURL   string
+	// Notes is the user's note to the cleanup model: names and jargon to spell
+	// right, preferences to follow.
+	Notes string
 
 	// Live pastes as you speak: the recording is cut at pauses and each piece
 	// is transcribed, cleaned, and pasted while the mic stays open.
@@ -87,10 +90,13 @@ type Engine struct {
 
 	cleanMu       sync.Mutex // guards the cleaner fields and srv
 	clean         cleanup.Cleaner
-	localClean    cleanup.Cleaner // the local server, once reachable
-	localURL      string          // local endpoint; "" until the bundled server is up
-	cloudClean    cleanup.Cleaner // hosted endpoint, when a key is set
+	localClean    *cleanup.LLM // the local server, once reachable
+	localURL      string       // local endpoint; "" until the bundled server is up
+	cloudClean    *cleanup.LLM // hosted endpoint, when a key is set
+	cloudKey      string
+	cloudModel    string
 	useCloudClean bool
+	notes         string // the user's note to the cleanup model
 	srv           *models.Server
 	srvMu         sync.Mutex // serializes local cleanup-server startup
 
@@ -98,6 +104,8 @@ type Engine struct {
 	live       atomic.Bool // paste as you speak (setting)
 	liveRec    atomic.Bool // the current recording is being segmented
 	seg        *audio.Segmenter
+	recBuf     []byte                 // streamed audio of a non-live recording (recorder goroutine, then stopCapture)
+	behind     atomic.Bool            // a segment was dropped because the output worker is behind
 	dictID     atomic.Uint64          // increments per recording
 	notify     func(kind, msg string) // optional UI notifier; set once before Start
 
@@ -131,6 +139,7 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 		seg:      audio.NewSegmenter(),
 		notify:   cfg.Notify,
 		localURL: cfg.CleanupURL,
+		notes:    cfg.Notes,
 	}
 	e.toggleMode.Store(cfg.Mode == "toggle")
 	e.live.Store(cfg.Live)
@@ -164,14 +173,48 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 	// Cleanup: an explicit local URL is used as-is; the bundled server fills
 	// localURL in later (see maybeStartLocalServer).
 	if cfg.CleanupURL != "" {
-		e.localClean = cleanup.NewLLM(cfg.CleanupURL)
+		e.localClean = e.newLocalCleaner(cfg.CleanupURL)
 	}
-	if cfg.OpenRouterAPIKey != "" {
-		e.cloudClean = cleanup.NewCloud(cleanup.OpenRouterURL, cfg.OpenRouterAPIKey, cfg.CleanupModel)
-	}
+	e.cloudKey, e.cloudModel = cfg.OpenRouterAPIKey, cfg.CleanupModel
+	e.cloudClean = e.newCloudCleaner()
 	e.useCloudClean = cfg.Cleanup == "openrouter" && e.cloudClean != nil
 	e.refreshClean()
 	return e
+}
+
+// newLocalCleaner builds the local cleaner with the current notes. The caller
+// holds cleanMu (or is still constructing the engine).
+func (e *Engine) newLocalCleaner(url string) *cleanup.LLM {
+	c := cleanup.NewLLM(url)
+	c.Notes = e.notes
+	return c
+}
+
+// newCloudCleaner builds the hosted cleaner from the stored key and model, or
+// nil without a key. The caller holds cleanMu (or is still constructing).
+func (e *Engine) newCloudCleaner() *cleanup.LLM {
+	if e.cloudKey == "" {
+		return nil
+	}
+	c := cleanup.NewCloud(cleanup.OpenRouterURL, e.cloudKey, e.cloudModel)
+	c.Notes = e.notes
+	return c
+}
+
+// SetNotes updates the user's note to the cleanup model live. Cleaners are
+// rebuilt rather than mutated, since the output worker may be mid-request.
+func (e *Engine) SetNotes(notes string) {
+	e.cleanMu.Lock()
+	defer e.cleanMu.Unlock()
+	if notes == e.notes {
+		return
+	}
+	e.notes = notes
+	if e.localURL != "" {
+		e.localClean = e.newLocalCleaner(e.localURL)
+	}
+	e.cloudClean = e.newCloudCleaner()
+	e.refreshClean()
 }
 
 // Start launches the engine's goroutines, the floating overlay, the bundled
@@ -248,11 +291,8 @@ func (e *Engine) SetTranscription(kind, apiKey, model string) {
 // model is downloaded and it isn't running yet.
 func (e *Engine) SetCleanup(kind, apiKey, model string) {
 	e.cleanMu.Lock()
-	if apiKey != "" {
-		e.cloudClean = cleanup.NewCloud(cleanup.OpenRouterURL, apiKey, model)
-	} else {
-		e.cloudClean = nil
-	}
+	e.cloudKey, e.cloudModel = apiKey, model
+	e.cloudClean = e.newCloudCleaner()
 	e.useCloudClean = kind == "openrouter" && e.cloudClean != nil
 	e.refreshClean()
 	cloud := e.useCloudClean
@@ -314,7 +354,7 @@ func (e *Engine) setLocalCleanupURL(url string) {
 	if url == "" {
 		e.localClean = nil
 	} else {
-		e.localClean = cleanup.NewLLM(url)
+		e.localClean = e.newLocalCleaner(url)
 	}
 	e.refreshClean()
 	e.cleanMu.Unlock()
@@ -477,6 +517,7 @@ func (e *Engine) startCapture() bool {
 	// settings change mid-dictation can't desynchronize the segment offsets.
 	e.dictID.Add(1)
 	e.seg.Reset()
+	e.recBuf = e.recBuf[:0]
 	e.liveRec.Store(e.live.Load() && e.streams)
 	if err := e.rec.Start(); err != nil {
 		log.Printf("record start: %v", err)
@@ -490,9 +531,11 @@ func (e *Engine) startCapture() bool {
 
 // onAudio runs on the recorder's goroutine with each captured chunk. In live
 // mode it feeds the segmenter, which hands finished utterances to the output
-// worker while the mic is still open.
+// worker while the mic is still open; otherwise it just collects the
+// recording for stopCapture.
 func (e *Engine) onAudio(pcm []byte) {
 	if !e.liveRec.Load() {
+		e.recBuf = append(e.recBuf, pcm...)
 		return
 	}
 	id := e.dictID.Load()
@@ -502,9 +545,19 @@ func (e *Engine) onAudio(pcm []byte) {
 }
 
 // enqueue marks a job in flight (blue dot) and hands it to the output worker.
+// It never blocks: the recorder's goroutine calls it, and stalling that starves
+// the capture ring. If the worker is that far behind (a hung backend), the
+// segment is dropped and the user told once.
 func (e *Engine) enqueue(j job) {
-	e.addProcessing(1)
-	e.jobs <- j
+	select {
+	case e.jobs <- j:
+		e.addProcessing(1)
+	default:
+		log.Printf("output queue full; dropped a %d-byte segment", len(j.wav))
+		if !e.behind.Swap(true) {
+			e.emit("error", "Transcription is falling behind; some speech was dropped.")
+		}
+	}
 }
 
 // stopCapture ends the recording and hands what is left to the output worker:
@@ -517,31 +570,36 @@ func (e *Engine) stopCapture() {
 		log.Printf("record stop: %v", err)
 		return
 	}
-	pcm := wav
-	if len(pcm) >= audio.HeaderBytes {
-		pcm = pcm[audio.HeaderBytes:]
-	}
-	skip := len(pcm) < minSpeechBytes // too short to be speech: ignore the tap
-	if e.liveRec.Load() {
-		// Stop flushed every chunk through onAudio, so the segmenter's offset
-		// and speech flag describe this exact PCM.
-		off := e.seg.Offset()
-		if off > len(pcm) {
-			off = len(pcm)
+	// Stop flushed every chunk through onAudio, so a streaming recorder's
+	// audio is in the segmenter (live) or recBuf (not live); a non-streaming
+	// one returned it in the WAV.
+	var pcm []byte
+	var skip bool
+	switch {
+	case e.liveRec.Load():
+		pcm = e.seg.Tail()
+		// A tail without detected speech is normally the pause after the last
+		// segment. If nothing was ever cut, though, the gate may simply have
+		// missed a quiet speaker, so let the transcriber judge the whole take.
+		skip = e.seg.Offset() > 0 && !e.seg.TailHasSpeech()
+	case e.streams:
+		pcm = e.recBuf
+	default:
+		if len(wav) >= audio.HeaderBytes {
+			pcm = wav[audio.HeaderBytes:]
 		}
-		pcm = pcm[off:]
-		skip = !e.seg.TailHasSpeech() || len(pcm) < minSpeechBytes
-		wav = audio.EncodeWAV(pcm)
 	}
-	if skip {
+	if skip || len(pcm) < minSpeechBytes { // too short to be speech: ignore the tap
 		e.setRecording(false)
 		return
 	}
+	wav = audio.EncodeWAV(pcm)
 	// Mark processing before clearing recording so the dot goes red -> blue with
 	// no hidden flicker; the output worker clears it when done.
 	e.addProcessing(1)
 	e.setRecording(false)
 	e.jobs <- job{wav: wav, id: e.dictID.Load()}
+	e.behind.Store(false)
 }
 
 // processLoop is the single ordered output worker: transcribe -> clean -> inject,

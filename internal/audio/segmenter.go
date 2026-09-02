@@ -74,6 +74,14 @@ func (s *Segmenter) Offset() int { return s.cut }
 // TailHasSpeech reports whether speech was heard after the last cut.
 func (s *Segmenter) TailHasSpeech() bool { return s.speech }
 
+// Tail returns a copy of the audio since the last cut: what still needs
+// transcribing when the recording stops.
+func (s *Segmenter) Tail() []byte {
+	out := make([]byte, len(s.pending))
+	copy(out, s.pending)
+	return out
+}
+
 // Push feeds new PCM and emits any segments that complete. emit may be nil.
 func (s *Segmenter) Push(pcm []byte, emit func(seg []byte)) {
 	s.pending = append(s.pending, pcm...)
@@ -99,12 +107,12 @@ func bytesFor(d time.Duration) int {
 func (s *Segmenter) shouldCut() bool {
 	n := s.analyzed
 	switch {
-	case n >= bytesFor(s.HardMax):
-		return true
 	case !s.speech:
 		// Nothing but silence so far: drop it once it gets long, rather than
 		// carrying seconds of dead air into the first real segment.
-		return n >= bytesFor(s.HardMax)
+		return n >= bytesFor(s.SoftMax)
+	case n >= bytesFor(s.HardMax):
+		return true
 	case n >= bytesFor(s.SoftMax):
 		return s.silence >= bytesFor(s.ShortPause)
 	default:

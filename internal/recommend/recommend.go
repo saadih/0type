@@ -24,9 +24,9 @@ import (
 	"time"
 )
 
-// Feeds. The first is the documented catalog; the others are the JSON the
-// rankings page itself loads (undocumented, so each one is optional: a
-// missing feed drops the lists that need it rather than the whole result).
+// Feeds. The first two are the documented catalog; the others are the JSON
+// the rankings page itself loads (undocumented, so a refresh that finds them
+// missing or reshaped fails as a whole and the cache/snapshot stands).
 const (
 	modelsURL = "https://openrouter.ai/api/v1/models"
 	// The default catalog omits transcription-only models; they have their own listing.
@@ -171,13 +171,22 @@ func Fetch(ctx context.Context) (Result, error) {
 	go func() { defer wg.Done(); perfErr = getJSON(ctx, performanceURL, &perf) }()
 	go func() { defer wg.Done(); usageErr = getJSON(ctx, transcriptionURL, &usage) }()
 	wg.Wait()
-	if catErr != nil {
-		return Result{}, catErr
-	}
-	if perfErr != nil && (usageErr != nil || sttErr != nil) {
-		return Result{}, fmt.Errorf("rankings feeds: %v; %v; %v", perfErr, usageErr, sttErr)
+	// Any feed missing means a half-empty result; better to keep serving the
+	// last complete one than to cache a hole for a day.
+	for _, err := range []error{catErr, sttErr, perfErr, usageErr} {
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	r := Build(append(catalog.Data, stt.Data...), perf.Data, usage.Data)
+	if len(r.Cleanup) != 3 || len(r.Transcription) != 1 {
+		return Result{}, fmt.Errorf("rankings feeds returned no usable rows (shape changed?)")
+	}
+	for _, g := range append(r.Cleanup, r.Transcription...) {
+		if len(g.Picks) == 0 {
+			return Result{}, fmt.Errorf("rankings feed for %q returned no usable rows", g.Title)
+		}
+	}
 	return r, nil
 }
 

@@ -29,11 +29,11 @@ func TestMicRecordsAndStreams(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run %d stop: %v", run, err)
 		}
-		pcm := len(wav) - HeaderBytes
+		pcm := streamed
 		want := int(d.Seconds() * BytesPerSecond)
 		t.Logf("run %d: %d bytes of PCM (%.2f s), %d chunks streamed", run, pcm, float64(pcm)/BytesPerSecond, chunks)
-		if pcm != streamed {
-			t.Fatalf("run %d: WAV holds %d bytes but %d were streamed", run, pcm, streamed)
+		if len(wav) != HeaderBytes {
+			t.Fatalf("run %d: streaming recorder returned %d bytes of WAV, want an empty one", run, len(wav))
 		}
 		if pcm < want*9/10 || pcm > want*12/10 {
 			t.Fatalf("run %d: captured %d bytes, expected about %d", run, pcm, want)

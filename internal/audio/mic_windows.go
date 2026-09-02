@@ -254,17 +254,20 @@ func (m *Mic) harvest(i int, onAudio func([]byte)) {
 		return
 	}
 	data := m.bufs[i][:n]
-	m.rec = append(m.rec, data...)
-	if onAudio != nil {
-		chunk := make([]byte, n)
-		copy(chunk, data)
-		onAudio(chunk)
+	if onAudio == nil {
+		m.rec = append(m.rec, data...)
+		return
 	}
+	// A streaming consumer owns the audio; keeping a second copy here would
+	// grow without bound over a long live dictation.
+	chunk := make([]byte, n)
+	copy(chunk, data)
+	onAudio(chunk)
 }
 
-// Stop ends capture and returns the recording as a WAV file. Audio still in the
-// ring is flushed through the streaming callback first, so the callback has
-// seen every byte of the returned PCM by the time Stop returns.
+// Stop ends capture and returns the recording as a WAV file. With a streaming
+// callback set, the audio went to the callback instead (the last ring buffers
+// are flushed through it here, before Stop returns) and the WAV is empty.
 func (m *Mic) Stop() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

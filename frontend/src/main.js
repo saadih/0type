@@ -19,26 +19,6 @@ document.querySelector('#app').innerHTML = `
         <button id="rebind" class="ghost">Rebind</button>
       </div>
     </label>
-    <label class="field">
-      <span>Mode</span>
-      <select id="mode">
-        <option value="hold">Hold to talk</option>
-        <option value="toggle">Tap to toggle</option>
-      </select>
-    </label>
-    <label class="field">
-      <span>Output</span>
-      <select id="output">
-        <option value="live">Paste as I speak (at each pause)</option>
-        <option value="end">Paste when I stop</option>
-      </select>
-    </label>
-    <label class="field">
-      <span>Microphone</span>
-      <select id="mic">
-        <option value="">System default</option>
-      </select>
-    </label>
 
     <label class="field">
       <span>Transcription</span>
@@ -75,8 +55,40 @@ document.querySelector('#app').innerHTML = `
       <div class="hint">One key for both cloud options. Create one at openrouter.ai/keys.</div>
     </div>
 
+    <label class="field">
+      <span>About you <em>— for the cleanup model</em></span>
+      <textarea id="notes" rows="3" maxlength="1500" placeholder="Names and words to spell right (people, products, tools), and preferences (keep code words in English, no bullet lists)…"></textarea>
+    </label>
+  </div>
+
+  <div class="view off" id="view-settings">
+    <label class="field">
+      <span>Mode</span>
+      <select id="mode">
+        <option value="hold">Hold to talk</option>
+        <option value="toggle">Tap to toggle</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Output</span>
+      <select id="output">
+        <option value="live">Paste as I speak (at each pause)</option>
+        <option value="end">Paste when I stop</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Microphone</span>
+      <select id="mic">
+        <option value="">System default</option>
+      </select>
+    </label>
+    <label class="field row-field">
+      <span>Start with Windows</span>
+      <input type="checkbox" id="autostart" />
+    </label>
+
     <div class="field">
-      <span>Models <em>— local, downloaded on demand</em></span>
+      <span>Local models <em>— downloaded ones show up as Local on the main screen</em></span>
       <div class="model-row">
         <div class="model-info"><b>Parakeet v3</b> · transcription <span id="parakeet-status" class="badge">…</span></div>
         <button id="parakeet-dl" class="ghost" disabled>Download</button>
@@ -88,13 +100,7 @@ document.querySelector('#app').innerHTML = `
       </div>
       <div class="bar" id="qwen-bar"><div class="fill" id="qwen-fill"></div></div>
     </div>
-  </div>
 
-  <div class="view off" id="view-settings">
-    <label class="field row-field">
-      <span>Start with Windows</span>
-      <input type="checkbox" id="autostart" />
-    </label>
     <div class="field">
       <span>My transcription models <em>— listed first under Recommended</em></span>
       <ul class="mine" id="mine-transcription"></ul>
@@ -111,7 +117,7 @@ document.querySelector('#app').innerHTML = `
         <button class="ghost" id="add-cleanup-btn">Add</button>
       </div>
     </div>
-    <div class="hint">Slugs are the "author/model" names from openrouter.ai/models. Save to keep changes.</div>
+    <div class="hint">Slugs are the "author/model" names from openrouter.ai/models.</div>
   </div>
   </main>
   <footer>
@@ -127,8 +133,9 @@ let binding = { kind: 'mouse', code: 4, name: 'Mouse Back' };
 const mine = { transcription: [], cleanup: [] }; // the user's own model slugs
 let recs = { transcription: [], cleanup: [] };   // last recommendations from OpenRouter
 
-// Two views in one window: the main screen, and Settings for the rarely
-// touched things. The header button flips between them.
+// Two views in one window: the main screen (what you touch while dictating)
+// and Settings for the rest. The header button flips between them; Save
+// applies to both.
 function showSettings(on) {
   $('view-main').classList.toggle('off', on);
   $('view-settings').classList.toggle('off', !on);
@@ -142,6 +149,16 @@ function human(n) {
   return (n / 1e3).toFixed(0) + ' KB';
 }
 
+// A "Local" option is offered only once its model is downloaded; until then
+// the stage can only be cloud.
+function setLocalOption(selectId, available) {
+  const sel = $(selectId);
+  const opt = sel.querySelector('option[value="local"]');
+  opt.hidden = !available; opt.disabled = !available;
+  if (!available && sel.value === 'local') sel.value = 'openrouter';
+  syncCloudFields();
+}
+
 function setQwen(state) {
   const badge = $('qwen-status');
   if (state === 'installed' || state === 'ready') {
@@ -149,14 +166,18 @@ function setQwen(state) {
     $('qwen-dl').textContent = 'Re-download'; $('qwen-dl').disabled = false;
     $('qwen-bar').classList.remove('active');
   } else { badge.textContent = 'not installed'; badge.className = 'badge'; }
+  setLocalOption('cleaner', state === 'installed' || state === 'ready');
 }
 
 function setParakeet(supported, installed) {
   const badge = $('parakeet-status'); const btn = $('parakeet-dl');
-  if (!supported) { badge.textContent = 'not in this build'; badge.className = 'badge soon'; btn.disabled = true; return; }
-  btn.disabled = false;
-  if (installed) { badge.textContent = 'installed'; badge.className = 'badge installed'; btn.textContent = 'Re-download'; }
-  else { badge.textContent = 'not installed'; badge.className = 'badge'; }
+  if (!supported) { badge.textContent = 'not in this build'; badge.className = 'badge soon'; btn.disabled = true; }
+  else {
+    btn.disabled = false;
+    if (installed) { badge.textContent = 'installed'; badge.className = 'badge installed'; btn.textContent = 'Re-download'; }
+    else { badge.textContent = 'not installed'; badge.className = 'badge'; }
+  }
+  setLocalOption('transcriber', supported && installed);
 }
 
 // Model fields show under the stage set to cloud; the key field shows when
@@ -176,7 +197,7 @@ $('cleaner').addEventListener('change', syncCloudFields);
 // rankings boiled down to a few picks. Choosing one fills the model input.
 function fillPicker(kind) {
   const sel = $(kind + '-pick');
-  sel.length = 1;
+  sel.querySelectorAll('optgroup').forEach((g) => g.remove()); // .length = 1 would leave the headers
   const groups = [];
   if (mine[kind].length) groups.push({ title: 'My models', picks: mine[kind].map((m) => ({ model: m, name: m, detail: 'added by you' })) });
   groups.push(...(recs[kind] || []));
@@ -213,7 +234,7 @@ async function loadRecommendations(refresh) {
 }
 $('rec-refresh').addEventListener('click', (e) => { e.preventDefault(); loadRecommendations(true); });
 
-// The user's own models (Settings page): a list per stage with add/remove.
+// The user's own models: a list per stage with add/remove.
 function renderMine(kind) {
   const ul = $('mine-' + kind);
   ul.innerHTML = '';
@@ -221,7 +242,7 @@ function renderMine(kind) {
     const li = document.createElement('li');
     const code = document.createElement('code'); code.textContent = m;
     const rm = document.createElement('button'); rm.className = 'ghost small'; rm.textContent = 'Remove';
-    rm.addEventListener('click', () => { mine[kind].splice(i, 1); renderMine(kind); fillPicker(kind); });
+    rm.addEventListener('click', () => { mine[kind].splice(i, 1); renderMine(kind); });
     li.appendChild(code); li.appendChild(rm);
     ul.appendChild(li);
   });
@@ -268,6 +289,7 @@ async function load() {
   $('cleaner').value = s.cleaner === 'openrouter' ? 'openrouter' : 'local';
   $('cleanup-model').value = s.cleanupModel || '';
   $('openrouter-key').value = s.openrouterApiKey || '';
+  $('notes').value = s.notes || '';
   mine.transcription = (s.myTranscriptionModels || []).slice();
   mine.cleanup = (s.myCleanupModels || []).slice();
   renderMine('transcription'); renderMine('cleanup');
@@ -276,14 +298,13 @@ async function load() {
     $('transcription-model').placeholder = d.transcription;
     $('cleanup-model').placeholder = d.cleanup;
   } catch (e) { /* keep "Model" */ }
-  syncCloudFields();
+  const m = await ModelState();
+  setQwen(m.qwen ? 'installed' : 'missing');
+  setParakeet(await ParakeetSupported(), m.parakeet);
   loadRecommendations(false); // in the background; the pickers fill in when it lands
   await loadMics(s.inputDevice);
   try { $('autostart').checked = await GetAutostart(); } catch (e) { /* non-Windows */ }
   try { $('version').textContent = 'v' + (await GetVersion()); } catch (e) { /* ignore */ }
-  const m = await ModelState();
-  if (m.qwen) setQwen('installed');
-  setParakeet(await ParakeetSupported(), m.parakeet);
 }
 
 function flash(msg, ok = true) {
@@ -339,7 +360,7 @@ EventsOn('model-ready', (id) => {
   else if (id === 'parakeet') {
     setParakeet(true, true);
     $('parakeet-bar').classList.remove('active');
-    flash('Parakeet ready ✓ — start dictating');
+    flash('Parakeet ready ✓ — pick Local on the main screen');
   }
 });
 
@@ -357,6 +378,7 @@ $('save').addEventListener('click', async () => {
     cleaner: $('cleaner').value,
     cleanupModel: $('cleanup-model').value.trim(),
     openrouterApiKey: $('openrouter-key').value.trim(),
+    notes: $('notes').value.trim(),
     myTranscriptionModels: mine.transcription.slice(),
     myCleanupModels: mine.cleanup.slice(),
   };

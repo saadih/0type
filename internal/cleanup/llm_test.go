@@ -45,19 +45,22 @@ func TestSplitChunksLongSentence(t *testing.T) {
 }
 
 func TestStripOverlap(t *testing.T) {
-	cases := []struct{ prev, out, want string }{
+	cases := []struct{ prev, out, raw, want string }{
 		{`For example, I say, "Yeah, I sit at the computer a lot," and it`,
 			`For example, I say, "Yeah, I sit at the computer a lot," and it auto transcribes to "I sit," but the LLM misses it.`,
+			"auto transcribes to I sit but the LLM misses it",
 			`auto transcribes to "I sit," but the LLM misses it.`},
-		{"I went to the store", "I went to the store. And then I came home.", "And then I came home."},
-		{"I went to the store", "and then I came home", "and then I came home"},
-		{"I went to the store", "I went to the store", ""},
-		{"", "Hello there.", "Hello there."},
-		{"one two", "one two three", "one two three"}, // too short an overlap to trust
+		{"I went to the store", "I went to the store. And then I came home.", "and then I came home", "And then I came home."},
+		{"I went to the store", "and then I came home", "and then I came home", "and then I came home"},
+		{"I went to the store", "I went to the store", "", ""},
+		{"", "Hello there.", "hello there", "Hello there."},
+		{"one two", "one two three", "one two three", "one two three"}, // too short an overlap to trust
+		// The speaker really repeated the phrase: keep it.
+		{"Thank you very much.", "Thank you very much, John.", "thank you very much john", "Thank you very much, John."},
 	}
 	for _, c := range cases {
-		if got := stripOverlap(c.prev, c.out); got != c.want {
-			t.Errorf("stripOverlap(%q, %q) = %q, want %q", c.prev, c.out, got, c.want)
+		if got := stripOverlap(c.prev, c.out, c.raw); got != c.want {
+			t.Errorf("stripOverlap(%q, %q, %q) = %q, want %q", c.prev, c.out, c.raw, got, c.want)
 		}
 	}
 }

@@ -56,4 +56,16 @@ func TestLLMLive(t *testing.T) {
 		t.Errorf("previous context echoed: %q", got)
 	}
 	t.Logf("continuation: %q", got)
+
+	// The user's note steers spelling of names and terms.
+	noted := NewLLM(url)
+	noted.Notes = "I work at OpMore. My tools: Wails, Parakeet, llama.cpp. My colleague is Saadi."
+	got, err = noted.Clean("so I built the window with whales and sadie helped with the parakeet part", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "Wails") || !strings.Contains(got, "Saadi") {
+		t.Errorf("notes not applied: %q", got)
+	}
+	t.Logf("with notes: %q", got)
 }

@@ -9,6 +9,7 @@
 //	OPENROUTER_STT_MODEL  transcription model on OpenRouter (default openai/whisper-large-v3-turbo)
 //	OPENROUTER_MODEL      cleanup model on OpenRouter (default anthropic/claude-haiku-4.5)
 //	ZEROTYPE_CLEANUP_URL  clean with an existing OpenAI-compatible server instead of the bundled one
+//	ZEROTYPE_NOTES        a note to the cleanup model (names, jargon, preferences)
 //	ZEROTYPE_LIVE=0       paste only on release instead of as you speak
 package main
 
@@ -27,13 +28,16 @@ func main() {
 		TranscriptionModel: os.Getenv("OPENROUTER_STT_MODEL"),
 		CleanupModel:       os.Getenv("OPENROUTER_MODEL"),
 		CleanupURL:         os.Getenv("ZEROTYPE_CLEANUP_URL"),
+		Notes:              os.Getenv("ZEROTYPE_NOTES"),
 		Live:               os.Getenv("ZEROTYPE_LIVE") != "0",
 		Binding:            hotkey.DefaultBinding(),
 		AllowStub:          true, // console/dev: canned transcript when no key/model
 	}
 	if cfg.OpenRouterAPIKey != "" {
 		cfg.Transcription = "openrouter"
-		cfg.Cleanup = "openrouter"
+		if cfg.CleanupURL == "" { // an explicit local server wins over the cloud
+			cfg.Cleanup = "openrouter"
+		}
 	}
 	engine := app.New(cfg, func(recording bool) {
 		if recording {

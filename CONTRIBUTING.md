@@ -26,6 +26,7 @@ internal/
   hotkey/         global keyboard+mouse hook, rebinding, capture
   audio/          winmm microphone capture
   transcribe/     Parakeet (cgo) | OpenRouter | stub
+  recommend/      model shortlists from OpenRouter rankings
   cleanup/        Qwen via an OpenAI-compatible endpoint
   inject/         clipboard paste
   overlay/        floating recording dot

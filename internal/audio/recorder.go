@@ -21,12 +21,11 @@ type DeviceSelector interface {
 }
 
 // Streaming is an optional Recorder capability: delivering audio while it is
-// being captured. fn receives each new chunk of raw 16 kHz mono 16-bit PCM (no
-// WAV header) in order, from the recorder's own goroutine. Every byte passed to
-// fn also ends up in the WAV that Stop returns, in the same order, and Stop
-// flushes the last chunks through fn before returning, so a caller can slice
-// Stop's PCM by the byte offsets it has already consumed. fn must return
-// promptly. Set it before Start; nil disables streaming.
+// being captured instead of at Stop. fn receives each new chunk of raw 16 kHz
+// mono 16-bit PCM (no WAV header) in order, from the recorder's own goroutine;
+// Stop flushes the last chunks through fn before returning and then returns an
+// empty WAV, since the caller already has every byte. fn must return promptly.
+// Set it before Start; nil disables streaming.
 type Streaming interface {
 	OnAudio(fn func(pcm []byte))
 }

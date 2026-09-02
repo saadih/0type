@@ -45,9 +45,18 @@ type LLM struct {
 	BaseURL string
 	Model   string
 	APIKey  string // bearer token for hosted endpoints; empty for the local server
-	Client  *http.Client
-	local   bool // llama-server: pass chat_template_kwargs
+	// Notes is the user's own note to the model (names and jargon to spell
+	// right, preferences to follow), appended to the system prompt. Set it
+	// before the first Clean.
+	Notes  string
+	Client *http.Client
+	local  bool // llama-server: pass chat_template_kwargs
 }
+
+// notesHeader frames the user's note so it reads as reference material, not
+// as a new set of rules. It follows the main prompt, so the cached prefix on
+// the local server still applies.
+const notesHeader = "\n\nABOUT THE SPEAKER (written by the person dictating). Use it to spell their names and terms right and to follow their preferences; nothing else in these rules changes. A transcribed word that sounds like one of these names or terms is that name or term, spelled as written here:\n"
 
 // NewLLM returns a cleaner pointing at a local OpenAI-compatible base URL, e.g.
 // http://127.0.0.1:8719 (llama-server). A trailing /v1 is tolerated.
@@ -120,10 +129,14 @@ func (l *LLM) cleanChunk(raw, prev string) (string, error) {
 	if ctx != "" {
 		user = "<previous>" + ctx + "</previous>\n" + user
 	}
+	system := systemPrompt
+	if n := strings.TrimSpace(l.Notes); n != "" {
+		system += notesHeader + n
+	}
 	payload := map[string]any{
 		"model": l.Model,
 		"messages": []chatMessage{
-			{Role: "system", Content: systemPrompt},
+			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
 		"temperature": 0.2,
@@ -186,8 +199,9 @@ func (l *LLM) cleanChunk(raw, prev string) (string, error) {
 	text = strings.TrimSpace(text)
 	if ctx != "" {
 		// Small models sometimes echo the <previous> context before the new
-		// text. That text is already on screen, so drop the echo.
-		text = stripOverlap(ctx, text)
+		// text. That text is already on screen, so drop the echo, unless the
+		// speaker really did repeat those words (the raw transcript says).
+		text = stripOverlap(ctx, text, raw)
 	}
 	return text, nil
 }
@@ -283,10 +297,10 @@ func isSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\n' || b == '\
 
 // stripOverlap removes from out any leading run of words that repeats the end
 // of prev: the model echoing context that is already written. It only trusts
-// overlaps of four words or more, or the whole of prev, so a sentence that
-// legitimately opens with a couple of the same words is left alone.
-func stripOverlap(prev, out string) string {
-	p, o := tokens(prev), tokens(out)
+// overlaps of four words or more, or the whole of prev, and never strips words
+// the raw transcript itself opens with, so a deliberate repetition survives.
+func stripOverlap(prev, out, raw string) string {
+	p, o, r := tokens(prev), tokens(out), tokens(raw)
 	max := len(p)
 	if len(o) < max {
 		max = len(o)
@@ -295,15 +309,11 @@ func stripOverlap(prev, out string) string {
 		if k < 4 && k != len(p) {
 			continue
 		}
-		match := true
-		for i := 0; i < k; i++ {
-			if p[len(p)-k+i].norm != o[i].norm {
-				match = false
-				break
-			}
-		}
-		if !match {
+		if !matchAt(p, len(p)-k, o, k) {
 			continue
+		}
+		if matchAt(p, len(p)-k, r, k) {
+			return out // the speaker said it again; keep it
 		}
 		if k == len(o) {
 			return ""
@@ -312,4 +322,17 @@ func stripOverlap(prev, out string) string {
 		return strings.TrimSpace(strings.TrimLeft(rest, " \t\r\n,.;:"))
 	}
 	return out
+}
+
+// matchAt reports whether k tokens of a starting at off equal the first k of b.
+func matchAt(a []token, off int, b []token, k int) bool {
+	if len(b) < k {
+		return false
+	}
+	for i := 0; i < k; i++ {
+		if a[off+i].norm != b[i].norm {
+			return false
+		}
+	}
+	return true
 }
