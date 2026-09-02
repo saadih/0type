@@ -52,6 +52,10 @@ Pieces of one dictation share an id. The worker remembers what it last pasted fo
 
 The trade-off is that a long think-pause mid-sentence becomes a boundary, and the cleaner then sees a fragment. The prompt tells it to stop where the speaker stopped rather than complete the thought; a bigger cloud model follows that more reliably than the 4B local one. Turning live mode off restores paste-on-release.
 
+## Recommended models
+
+`internal/recommend` boils OpenRouter's rankings down to the picker under each model field. It reads the documented catalog (prices, the Artificial Analysis intelligence index) plus the JSON feeds the rankings page itself loads (per-model p50 latency, weekly transcription requests). Cleanup gets three lists: best value is intelligence per blended dollar, fastest is lowest p50 latency, smartest is the raw index; the first two are limited to models scoring at least 25 and carrying real traffic. Transcription gets the three most used models, since OpenRouter publishes no speed or accuracy data for speech-to-text. The result is cached in the data dir for a day; if a refresh fails, the cache or an embedded snapshot (`snapshot.json`, regenerated with `ZEROTYPE_WRITE_SNAPSHOT=1 go test ./internal/recommend`) is shown marked as offline. The rankings feeds are undocumented, so each one is optional and a missing feed only drops the lists that need it. Rankings data is CC BY 4.0; the attribution line is shown in the window.
+
 ## Trigger
 
 - The default binding is the mouse back button (MB4), hold to talk. That's the reason the project exists.

@@ -1,5 +1,5 @@
 import './style.css';
-import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen, DownloadParakeet, ParakeetSupported, InputDevices, GetAutostart, SetAutostart, GetVersion, DefaultModels } from '../wailsjs/go/main/App';
+import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen, DownloadParakeet, ParakeetSupported, InputDevices, GetAutostart, SetAutostart, GetVersion, DefaultModels, Recommendations } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
@@ -49,7 +49,8 @@ document.querySelector('#app').innerHTML = `
     </label>
     <div class="field sub" id="transcriber-fields">
       <input type="text" id="transcription-model" placeholder="Model" autocomplete="off" spellcheck="false" />
-      <div class="hint">Any speech-to-text model on OpenRouter, e.g. openai/whisper-large-v3-turbo or nvidia/parakeet-tdt-0.6b-v3. Audio leaves your machine.</div>
+      <select id="transcription-pick" class="pick"><option value="">Recommended…</option></select>
+      <div class="hint">Any speech-to-text model on OpenRouter. Audio leaves your machine.</div>
     </div>
 
     <label class="field">
@@ -61,7 +62,11 @@ document.querySelector('#app').innerHTML = `
     </label>
     <div class="field sub" id="cleaner-fields">
       <input type="text" id="cleanup-model" placeholder="Model" autocomplete="off" spellcheck="false" />
+      <select id="cleanup-pick" class="pick"><option value="">Recommended…</option></select>
       <div class="hint">Any chat model on OpenRouter. Bigger models catch more misheard words. Transcripts leave your machine.</div>
+    </div>
+    <div class="field sub keyed" id="rec-source">
+      <div class="hint"><span id="rec-status">Loading recommendations…</span> <a href="#" id="rec-refresh">Refresh</a></div>
     </div>
 
     <div class="field sub keyed" id="openrouter-fields">
@@ -126,7 +131,46 @@ function syncCloudFields() {
   $('transcriber-fields').classList.toggle('open', stt);
   $('cleaner-fields').classList.toggle('open', llm);
   $('openrouter-fields').classList.toggle('open', stt || llm);
+  $('rec-source').classList.toggle('open', stt || llm);
 }
+
+// Recommended-model pickers: OpenRouter's rankings, boiled down to a few
+// picks per field. Choosing one fills the model input.
+function fillPicker(id, groups) {
+  const sel = $(id);
+  sel.length = 1;
+  (groups || []).forEach((g) => {
+    const og = document.createElement('optgroup');
+    og.label = g.title;
+    (g.picks || []).forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.model;
+      opt.textContent = p.name + ' — ' + p.detail;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
+}
+function wirePicker(id, inputId) {
+  $(id).addEventListener('change', (e) => {
+    if (e.target.value) $(inputId).value = e.target.value;
+    e.target.value = '';
+  });
+}
+wirePicker('transcription-pick', 'transcription-model');
+wirePicker('cleanup-pick', 'cleanup-model');
+
+async function loadRecommendations(refresh) {
+  const st = $('rec-status');
+  st.textContent = refresh ? 'Refreshing…' : 'Loading recommendations…';
+  try {
+    const r = await Recommendations(refresh);
+    fillPicker('transcription-pick', r.transcription);
+    fillPicker('cleanup-pick', r.cleanup);
+    st.textContent = (r.source || 'Source: OpenRouter rankings') + (r.stale ? ' (offline copy)' : '');
+  } catch (e) { st.textContent = 'Recommendations unavailable: ' + e; }
+}
+$('rec-refresh').addEventListener('click', (e) => { e.preventDefault(); loadRecommendations(true); });
 $('transcriber').addEventListener('change', syncCloudFields);
 $('cleaner').addEventListener('change', syncCloudFields);
 
@@ -161,6 +205,7 @@ async function load() {
     $('cleanup-model').placeholder = d.cleanup;
   } catch (e) { /* keep "Model" */ }
   syncCloudFields();
+  loadRecommendations(false); // in the background; the picker fills in when it lands
   await loadMics(s.inputDevice);
   try { $('autostart').checked = await GetAutostart(); } catch (e) { /* non-Windows */ }
   try { $('version').textContent = 'v' + (await GetVersion()); } catch (e) { /* ignore */ }

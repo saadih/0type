@@ -1,0 +1,89 @@
+{
+  "asOf": "2026-09-02T20:43:29.9706815Z",
+  "source": "Source: OpenRouter (openrouter.ai/rankings), as of 2026-09-02. CC BY 4.0.",
+  "cleanup": [
+    {
+      "title": "Best value",
+      "picks": [
+        {
+          "model": "inclusionai/ling-3.0-flash",
+          "name": "Ling-3.0-flash",
+          "detail": "intelligence 38 · $0.02/$0.06 per M"
+        },
+        {
+          "model": "upstage/solar-pro4",
+          "name": "Upstage: Solar Pro 4",
+          "detail": "intelligence 42 · $0.03/$0.12 per M"
+        },
+        {
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "name": "DeepSeek: DeepSeek V4 Flash 0731",
+          "detail": "intelligence 52 · $0.07/$0.18 per M"
+        }
+      ]
+    },
+    {
+      "title": "Fastest",
+      "picks": [
+        {
+          "model": "google/gemma-4-31b-it",
+          "name": "Google: Gemma 4 31B",
+          "detail": "154 ms to first token · $0.09/$0.34 per M"
+        },
+        {
+          "model": "stepfun/step-3.7-flash",
+          "name": "StepFun: Step 3.7 Flash",
+          "detail": "287 ms to first token · $0.2/$1.15 per M"
+        },
+        {
+          "model": "qwen/qwen3.6-35b-a3b",
+          "name": "Qwen: Qwen3.6 35B A3B",
+          "detail": "306 ms to first token · $0.1/$0.9 per M"
+        }
+      ]
+    },
+    {
+      "title": "Smartest",
+      "picks": [
+        {
+          "model": "anthropic/claude-fable-5.1",
+          "name": "Anthropic: Claude Fable 5.1",
+          "detail": "intelligence 65.7 · $10/$50 per M"
+        },
+        {
+          "model": "anthropic/claude-opus-5",
+          "name": "Claude Opus 5",
+          "detail": "intelligence 63.1 · $5/$25 per M"
+        },
+        {
+          "model": "anthropic/claude-fable-5",
+          "name": "Anthropic: Claude Fable 5",
+          "detail": "intelligence 62.1 · $10/$50 per M"
+        }
+      ]
+    }
+  ],
+  "transcription": [
+    {
+      "title": "Most used",
+      "picks": [
+        {
+          "model": "openai/whisper-large-v3",
+          "name": "OpenAI: Whisper Large V3",
+          "detail": "7.61M requests this week"
+        },
+        {
+          "model": "openai/whisper-large-v3-turbo",
+          "name": "OpenAI: Whisper Large V3 Turbo",
+          "detail": "3.56M requests this week"
+        },
+        {
+          "model": "openai/gpt-4o-mini-transcribe",
+          "name": "OpenAI: GPT-4o Mini Transcribe",
+          "detail": "614.21K requests this week"
+        }
+      ]
+    }
+  ],
+  "stale": false
+}

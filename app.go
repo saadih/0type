@@ -15,6 +15,7 @@ import (
 	"github.com/saadih/0type/internal/cleanup"
 	"github.com/saadih/0type/internal/hotkey"
 	"github.com/saadih/0type/internal/models"
+	"github.com/saadih/0type/internal/recommend"
 	"github.com/saadih/0type/internal/transcribe"
 	"github.com/saadih/0type/internal/tray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -149,6 +150,13 @@ func (a *App) DefaultModels() map[string]string {
 		"transcription": transcribe.DefaultOpenRouterModel,
 		"cleanup":       cleanup.DefaultCloudModel,
 	}
+}
+
+// Recommendations returns OpenRouter model shortlists for the two model fields,
+// refreshed from the rankings feeds at most once a day (or now, with refresh),
+// from the cache or the embedded snapshot when offline.
+func (a *App) Recommendations(refresh bool) (recommend.Result, error) {
+	return recommend.Get(models.Dir(), refresh)
 }
 
 // SaveSettings persists the settings edited in the window and applies the mode,

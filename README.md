@@ -82,6 +82,7 @@ The first two write `build\bin\0type.exe`; the Parakeet build also drops the she
 - **Transcription:** local Parakeet, or a speech-to-text model on OpenRouter (default `openai/whisper-large-v3-turbo`). Audio goes to OpenRouter.
 - **Cleanup:** local Qwen, or a chat model on OpenRouter (default `anthropic/claude-haiku-4.5`). Transcripts go to OpenRouter. Bigger models are better at working out what you meant when the recognizer mishears a word.
 - **OpenRouter API key:** one [key](https://openrouter.ai/keys) serves both cloud options.
+- **Recommended models:** each model field has a picker fed by [OpenRouter's rankings](https://openrouter.ai/rankings): best value, fastest, and smartest for cleanup; the three most used for transcription. It refreshes itself once a day and works offline from a bundled copy.
 - **Models:** download or re-download Parakeet and Qwen.
 
 Keys are saved in `%APPDATA%\0type\config.json`, readable only by your Windows account.

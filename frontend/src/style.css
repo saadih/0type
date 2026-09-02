@@ -131,3 +131,6 @@ footer {
 .sub input { width: 100%; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 13px; }
 .hint { font-size: 12px; color: var(--muted); }
 .sub.keyed { margin-top: 0; }
+.pick { color: var(--muted); font-size: 13px; }
+.hint a { color: var(--accent); text-decoration: none; }
+.hint a:hover { text-decoration: underline; }
