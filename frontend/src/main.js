@@ -28,9 +28,8 @@ document.querySelector('#app').innerHTML = `
       </select>
     </label>
     <div class="field sub" id="transcriber-fields">
-      <input type="text" id="transcription-model" placeholder="Model" autocomplete="off" spellcheck="false" />
-      <select id="transcription-pick" class="pick"><option value="">Recommended…</option></select>
-      <div class="hint">Any speech-to-text model on OpenRouter. Audio leaves your machine.</div>
+      <select id="transcription-model" class="pick"><option value="">Default</option></select>
+      <div class="hint">Audio leaves your machine. Add other models under Settings.</div>
     </div>
 
     <label class="field">
@@ -41,18 +40,11 @@ document.querySelector('#app').innerHTML = `
       </select>
     </label>
     <div class="field sub" id="cleaner-fields">
-      <input type="text" id="cleanup-model" placeholder="Model" autocomplete="off" spellcheck="false" />
-      <select id="cleanup-pick" class="pick"><option value="">Recommended…</option></select>
-      <div class="hint">Any chat model on OpenRouter. Bigger models catch more misheard words. Transcripts leave your machine.</div>
+      <select id="cleanup-model" class="pick"><option value="">Default</option></select>
+      <div class="hint">Transcripts leave your machine. Bigger models catch more misheard words.</div>
     </div>
     <div class="field sub keyed" id="rec-source">
       <div class="hint"><span id="rec-status">Loading recommendations…</span> <a href="#" id="rec-refresh">Refresh</a></div>
-    </div>
-
-    <div class="field sub keyed" id="openrouter-fields">
-      <span>OpenRouter API key</span>
-      <input type="password" id="openrouter-key" placeholder="sk-or-…" autocomplete="off" spellcheck="false" />
-      <div class="hint">One key for both cloud options. Create one at openrouter.ai/keys.</div>
     </div>
 
     <label class="field">
@@ -87,6 +79,12 @@ document.querySelector('#app').innerHTML = `
       <input type="checkbox" id="autostart" />
     </label>
 
+    <label class="field">
+      <span>OpenRouter API key</span>
+      <input type="password" id="openrouter-key" placeholder="sk-or-…" autocomplete="off" spellcheck="false" />
+      <div class="hint">One key for both cloud options. Create one at openrouter.ai/keys. Saved with Save.</div>
+    </label>
+
     <div class="field">
       <span>Local models <em>— downloaded ones show up as Local on the main screen</em></span>
       <div class="model-row">
@@ -102,7 +100,7 @@ document.querySelector('#app').innerHTML = `
     </div>
 
     <div class="field">
-      <span>My transcription models <em>— listed first under Recommended</em></span>
+      <span>My transcription models <em>— listed first on the main screen</em></span>
       <ul class="mine" id="mine-transcription"></ul>
       <div class="add-row">
         <input type="text" id="add-transcription" placeholder="author/model" autocomplete="off" spellcheck="false" />
@@ -110,7 +108,7 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
     <div class="field">
-      <span>My cleanup models <em>— listed first under Recommended</em></span>
+      <span>My cleanup models <em>— listed first on the main screen</em></span>
       <ul class="mine" id="mine-cleanup"></ul>
       <div class="add-row">
         <input type="text" id="add-cleanup" placeholder="author/model" autocomplete="off" spellcheck="false" />
@@ -132,6 +130,7 @@ const $ = (id) => document.getElementById(id);
 let binding = { kind: 'mouse', code: 4, name: 'Mouse Back' };
 const mine = { transcription: [], cleanup: [] }; // the user's own model slugs
 let recs = { transcription: [], cleanup: [] };   // last recommendations from OpenRouter
+let defaults = { transcription: '', cleanup: '' };
 
 // Two views in one window: the main screen (what you touch while dictating)
 // and Settings for the rest. The header button flips between them; Save
@@ -180,27 +179,29 @@ function setParakeet(supported, installed) {
   setLocalOption('transcriber', supported && installed);
 }
 
-// Model fields show under the stage set to cloud; the key field shows when
-// either stage is.
+// Model pickers show under the stage set to cloud.
 function syncCloudFields() {
   const stt = $('transcriber').value === 'openrouter';
   const llm = $('cleaner').value === 'openrouter';
   $('transcriber-fields').classList.toggle('open', stt);
   $('cleaner-fields').classList.toggle('open', llm);
-  $('openrouter-fields').classList.toggle('open', stt || llm);
   $('rec-source').classList.toggle('open', stt || llm);
 }
 $('transcriber').addEventListener('change', syncCloudFields);
 $('cleaner').addEventListener('change', syncCloudFields);
 
-// Recommended-model pickers: the user's own models first, then OpenRouter's
-// rankings boiled down to a few picks. Choosing one fills the model input.
-function fillPicker(kind) {
-  const sel = $(kind + '-pick');
+// The model picker is the model setting: the user's own models first, then
+// OpenRouter's rankings boiled down to a few picks, then whatever is saved
+// if it is in neither. Blank means the built-in default.
+function fillPicker(kind, keep) {
+  const sel = $(kind + '-model');
+  const cur = keep !== undefined ? keep : sel.value;
   sel.querySelectorAll('optgroup').forEach((g) => g.remove()); // .length = 1 would leave the headers
+  sel.options[0].textContent = 'Default' + (defaults[kind] ? ' — ' + defaults[kind] : '');
   const groups = [];
   if (mine[kind].length) groups.push({ title: 'My models', picks: mine[kind].map((m) => ({ model: m, name: m, detail: 'added by you' })) });
   groups.push(...(recs[kind] || []));
+  let found = cur === '';
   groups.forEach((g) => {
     const og = document.createElement('optgroup');
     og.label = g.title;
@@ -209,18 +210,17 @@ function fillPicker(kind) {
       opt.value = p.model;
       opt.textContent = p.name + ' — ' + p.detail;
       og.appendChild(opt);
+      if (p.model === cur) found = true;
     });
     sel.appendChild(og);
   });
+  if (!found) {
+    const og = document.createElement('optgroup'); og.label = 'Current';
+    const opt = document.createElement('option'); opt.value = cur; opt.textContent = cur;
+    og.appendChild(opt); sel.appendChild(og);
+  }
+  sel.value = cur;
 }
-function wirePicker(kind, inputId) {
-  $(kind + '-pick').addEventListener('change', (e) => {
-    if (e.target.value) $(inputId).value = e.target.value;
-    e.target.value = '';
-  });
-}
-wirePicker('transcription', 'transcription-model');
-wirePicker('cleanup', 'cleanup-model');
 
 async function loadRecommendations(refresh) {
   const st = $('rec-status');
@@ -285,19 +285,15 @@ async function load() {
   $('mode').value = s.mode || 'hold';
   $('output').value = s.output === 'end' ? 'end' : 'live';
   $('transcriber').value = s.transcriber === 'openrouter' ? 'openrouter' : 'local';
-  $('transcription-model').value = s.transcriptionModel || '';
   $('cleaner').value = s.cleaner === 'openrouter' ? 'openrouter' : 'local';
-  $('cleanup-model').value = s.cleanupModel || '';
   $('openrouter-key').value = s.openrouterApiKey || '';
   $('notes').value = s.notes || '';
+  try { defaults = await DefaultModels(); } catch (e) { /* keep blank */ }
   mine.transcription = (s.myTranscriptionModels || []).slice();
   mine.cleanup = (s.myCleanupModels || []).slice();
   renderMine('transcription'); renderMine('cleanup');
-  try {
-    const d = await DefaultModels();
-    $('transcription-model').placeholder = d.transcription;
-    $('cleanup-model').placeholder = d.cleanup;
-  } catch (e) { /* keep "Model" */ }
+  fillPicker('transcription', s.transcriptionModel || '');
+  fillPicker('cleanup', s.cleanupModel || '');
   const m = await ModelState();
   setQwen(m.qwen ? 'installed' : 'missing');
   setParakeet(await ParakeetSupported(), m.parakeet);
@@ -374,9 +370,9 @@ $('save').addEventListener('click', async () => {
     inputDevice: $('mic').value,
     output: $('output').value,
     transcriber: $('transcriber').value,
-    transcriptionModel: $('transcription-model').value.trim(),
+    transcriptionModel: $('transcription-model').value,
     cleaner: $('cleaner').value,
-    cleanupModel: $('cleanup-model').value.trim(),
+    cleanupModel: $('cleanup-model').value,
     openrouterApiKey: $('openrouter-key').value.trim(),
     notes: $('notes').value.trim(),
     myTranscriptionModels: mine.transcription.slice(),

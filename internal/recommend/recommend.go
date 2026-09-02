@@ -63,10 +63,10 @@ type Group struct {
 
 // Result is what the settings window shows.
 type Result struct {
-	AsOf          time.Time `json:"asOf"`
-	Source        string    `json:"source"` // CC BY 4.0 attribution line
-	Cleanup       []Group   `json:"cleanup"`
-	Transcription []Group   `json:"transcription"`
+	AsOf          string  `json:"asOf"`   // RFC 3339; a string so the Wails binding generator can type it
+	Source        string  `json:"source"` // CC BY 4.0 attribution line
+	Cleanup       []Group `json:"cleanup"`
+	Transcription []Group `json:"transcription"`
 	// Stale is set when a refresh failed and this came from the cache or the
 	// embedded snapshot instead.
 	Stale bool `json:"stale"`
@@ -78,7 +78,7 @@ type Result struct {
 func Get(dir string, force bool) (Result, error) {
 	path := filepath.Join(dir, cacheFile)
 	cached, cacheErr := readCache(path)
-	if cacheErr == nil && !force && time.Since(cached.AsOf) < maxAge {
+	if at, err := time.Parse(time.RFC3339, cached.AsOf); cacheErr == nil && err == nil && !force && time.Since(at) < maxAge {
 		return cached, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -236,7 +236,7 @@ func trim(f float64) string {
 func Build(catalog []catalogModel, perf []perfModel, usage []usageModel) Result {
 	now := time.Now().UTC()
 	r := Result{
-		AsOf:   now,
+		AsOf:   now.Format(time.RFC3339),
 		Source: "Source: OpenRouter (openrouter.ai/rankings), as of " + now.Format("2006-01-02") + ". CC BY 4.0.",
 	}
 

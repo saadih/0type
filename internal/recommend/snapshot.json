@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-09-02T20:43:29.9706815Z",
+  "asOf": "2026-09-02T21:20:14Z",
   "source": "Source: OpenRouter (openrouter.ai/rankings), as of 2026-09-02. CC BY 4.0.",
   "cleanup": [
     {
@@ -28,12 +28,12 @@
         {
           "model": "google/gemma-4-31b-it",
           "name": "Google: Gemma 4 31B",
-          "detail": "154 ms to first token · $0.09/$0.34 per M"
+          "detail": "150 ms to first token · $0.09/$0.34 per M"
         },
         {
           "model": "stepfun/step-3.7-flash",
           "name": "StepFun: Step 3.7 Flash",
-          "detail": "287 ms to first token · $0.2/$1.15 per M"
+          "detail": "294 ms to first token · $0.2/$1.15 per M"
         },
         {
           "model": "qwen/qwen3.6-35b-a3b",
