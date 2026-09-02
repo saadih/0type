@@ -1,5 +1,5 @@
 import './style.css';
-import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen, DownloadParakeet, ParakeetSupported, InputDevices, GetAutostart, SetAutostart, GetVersion, DefaultCloudModel } from '../wailsjs/go/main/App';
+import { GetSettings, SaveSettings, CaptureBinding, ModelState, DownloadQwen, DownloadParakeet, ParakeetSupported, InputDevices, GetAutostart, SetAutostart, GetVersion, DefaultModels } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
@@ -44,25 +44,30 @@ document.querySelector('#app').innerHTML = `
       <span>Transcription</span>
       <select id="transcriber">
         <option value="local">Local — Parakeet</option>
-        <option value="groq">Cloud — Groq Whisper (API key)</option>
+        <option value="openrouter">Cloud — OpenRouter</option>
       </select>
     </label>
-    <div class="field sub" id="groq-fields">
-      <input type="password" id="groq-key" placeholder="Groq API key (gsk_…)" autocomplete="off" spellcheck="false" />
-      <div class="hint">Audio is sent to Groq. Faster than local on slow machines; nothing else changes.</div>
+    <div class="field sub" id="transcriber-fields">
+      <input type="text" id="transcription-model" placeholder="Model" autocomplete="off" spellcheck="false" />
+      <div class="hint">Any speech-to-text model on OpenRouter, e.g. openai/whisper-large-v3-turbo or nvidia/parakeet-tdt-0.6b-v3. Audio leaves your machine.</div>
     </div>
 
     <label class="field">
       <span>Cleanup</span>
       <select id="cleaner">
         <option value="local">Local — Qwen3-4B</option>
-        <option value="openrouter">Cloud — OpenRouter (API key)</option>
+        <option value="openrouter">Cloud — OpenRouter</option>
       </select>
     </label>
-    <div class="field sub" id="openrouter-fields">
-      <input type="password" id="openrouter-key" placeholder="OpenRouter API key (sk-or-…)" autocomplete="off" spellcheck="false" />
-      <input type="text" id="openrouter-model" placeholder="Model" autocomplete="off" spellcheck="false" />
-      <div class="hint">Transcripts are sent to OpenRouter. Any chat model works; bigger models catch more misheard words.</div>
+    <div class="field sub" id="cleaner-fields">
+      <input type="text" id="cleanup-model" placeholder="Model" autocomplete="off" spellcheck="false" />
+      <div class="hint">Any chat model on OpenRouter. Bigger models catch more misheard words. Transcripts leave your machine.</div>
+    </div>
+
+    <div class="field sub keyed" id="openrouter-fields">
+      <span>OpenRouter API key</span>
+      <input type="password" id="openrouter-key" placeholder="sk-or-…" autocomplete="off" spellcheck="false" />
+      <div class="hint">One key for both cloud options. Create one at openrouter.ai/keys.</div>
     </div>
 
     <div class="field">
@@ -113,10 +118,14 @@ function setParakeet(supported, installed) {
   else { badge.textContent = 'not installed'; badge.className = 'badge'; }
 }
 
-// The cloud key fields only show when that backend is selected.
+// Model fields show under the stage set to cloud; the key field shows when
+// either stage is.
 function syncCloudFields() {
-  $('groq-fields').classList.toggle('open', $('transcriber').value === 'groq');
-  $('openrouter-fields').classList.toggle('open', $('cleaner').value === 'openrouter');
+  const stt = $('transcriber').value === 'openrouter';
+  const llm = $('cleaner').value === 'openrouter';
+  $('transcriber-fields').classList.toggle('open', stt);
+  $('cleaner-fields').classList.toggle('open', llm);
+  $('openrouter-fields').classList.toggle('open', stt || llm);
 }
 $('transcriber').addEventListener('change', syncCloudFields);
 $('cleaner').addEventListener('change', syncCloudFields);
@@ -141,12 +150,16 @@ async function load() {
   $('trigger').textContent = binding.name || 'Mouse Back';
   $('mode').value = s.mode || 'hold';
   $('output').value = s.output === 'end' ? 'end' : 'live';
-  $('transcriber').value = s.transcriber === 'groq' ? 'groq' : 'local';
-  $('groq-key').value = s.groqApiKey || '';
+  $('transcriber').value = s.transcriber === 'openrouter' ? 'openrouter' : 'local';
+  $('transcription-model').value = s.transcriptionModel || '';
   $('cleaner').value = s.cleaner === 'openrouter' ? 'openrouter' : 'local';
+  $('cleanup-model').value = s.cleanupModel || '';
   $('openrouter-key').value = s.openrouterApiKey || '';
-  $('openrouter-model').value = s.openrouterModel || '';
-  try { $('openrouter-model').placeholder = await DefaultCloudModel(); } catch (e) { /* keep "Model" */ }
+  try {
+    const d = await DefaultModels();
+    $('transcription-model').placeholder = d.transcription;
+    $('cleanup-model').placeholder = d.cleanup;
+  } catch (e) { /* keep "Model" */ }
   syncCloudFields();
   await loadMics(s.inputDevice);
   try { $('autostart').checked = await GetAutostart(); } catch (e) { /* non-Windows */ }
@@ -223,10 +236,10 @@ $('save').addEventListener('click', async () => {
     inputDevice: $('mic').value,
     output: $('output').value,
     transcriber: $('transcriber').value,
-    groqApiKey: $('groq-key').value.trim(),
+    transcriptionModel: $('transcription-model').value.trim(),
     cleaner: $('cleaner').value,
+    cleanupModel: $('cleanup-model').value.trim(),
     openrouterApiKey: $('openrouter-key').value.trim(),
-    openrouterModel: $('openrouter-model').value.trim(),
   };
   try {
     await SaveSettings(s);

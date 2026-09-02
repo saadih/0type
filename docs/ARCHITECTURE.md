@@ -16,7 +16,7 @@ The console (`cmd/0type`) and the GUI (repo root) share one engine, `internal/ap
 |---|---|---|
 | Trigger | `internal/hotkey` | Low-level mouse + keyboard hook, rebindable |
 | Record | `internal/audio` | winmm `waveIn` into a ring of 250 ms buffers, 16 kHz mono PCM, no CGO, no length limit; a pause segmenter for live mode |
-| Transcribe | `internal/transcribe` | Parakeet via sherpa-onnx (cgo), or Groq's hosted Whisper, or a stub |
+| Transcribe | `internal/transcribe` | Parakeet via sherpa-onnx (cgo), or OpenRouter speech-to-text, or a stub |
 | Clean | `internal/cleanup` | Qwen via the bundled llama-server, or a hosted model via OpenRouter, same client |
 | Inject | `internal/inject` | Clipboard write, paste, restore |
 | Overlay | `internal/overlay` | Cursor dot: red recording, blue processing, raw Win32 |
@@ -76,7 +76,7 @@ Closing the window doesn't quit 0type. `OnBeforeClose` hides the window and retu
 
 ## Distribution
 
-Cloud backends need nothing downloaded: Groq's `/audio/transcriptions` takes the same WAV, and OpenRouter speaks the same chat-completions shape as llama-server, so one client covers both.
+Cloud backends need nothing downloaded and share one OpenRouter key: `/audio/transcriptions` takes the same WAV (base64 in a JSON body) and any speech-to-text model on the router, and chat completions speak the same shape as llama-server, so the cleanup client covers both local and hosted.
 
 Nothing heavy lives in git. `internal/models` downloads the GGUF, the Parakeet model, and the `llama-server` binary on demand into `%LOCALAPPDATA%\0type\`, streaming each to a `.part` file and renaming on success. The sherpa DLLs come from the Go module cache; `scripts/build-parakeet.ps1` copies them next to the exe.
 

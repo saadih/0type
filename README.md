@@ -14,7 +14,7 @@ hold trigger → record → Parakeet (local) → Qwen (local) → paste at curso
 Most dictation tools can't bind to a mouse button, ship your audio to a server, or wrap a simple loop in features you never asked for. 0type keeps the loop small:
 
 - **Binds to your mouse.** Global push-to-talk on a side button (MB4/MB5), which Electron's `globalShortcut` can't reach. Rebind it live to any key or button.
-- **Runs on your machine.** Parakeet handles transcription, Qwen3-4B-Instruct handles cleanup, both downloaded on demand. If your machine is slow, or you want a bigger model catching misheard words, point either stage at the cloud (Groq Whisper, OpenRouter) with your own key.
+- **Runs on your machine.** Parakeet handles transcription, Qwen3-4B-Instruct handles cleanup, both downloaded on demand. If your machine is slow, or you want a bigger model catching misheard words, point either stage at OpenRouter with your own key.
 - **Pastes as you speak.** Each pause becomes a paste, so a long dictation lands while you talk instead of after. Recordings have no length limit.
 - **Small.** An 11 MB native binary over WebView2. Electron apps run ten times that. The hook, audio capture, and overlay are plain Go with no bundled browser.
 - **Focused.** One window that tucks into the system tray, a cursor dot, a few settings.
@@ -25,7 +25,7 @@ Most dictation tools can't bind to a mouse button, ship your audio to a server, 
 |---|---|
 | Trigger | Global low-level hook, rebindable to any key or mouse side/middle button, applied live |
 | Capture | Microphone via `winmm` (no CGO), any length; pauses split it into pieces on the fly |
-| Transcribe | Parakeet TDT 0.6B v3 via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), 25 European languages including Swedish; or Groq's hosted Whisper |
+| Transcribe | Parakeet TDT 0.6B v3 via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), 25 European languages including Swedish; or any speech-to-text model on OpenRouter |
 | Clean up | Qwen3-4B-Instruct via a bundled [llama.cpp](https://github.com/ggml-org/llama.cpp) server: drops filler, fixes punctuation, repairs misheard words ("I say at the computer" → "I sit at the computer"), keeps your wording; or any model on OpenRouter |
 | Inject | Clipboard paste, which handles å/ä/ö and emoji |
 | Feedback | A dot that follows your cursor: red while recording, blue while it transcribes and cleans up |
@@ -79,8 +79,9 @@ The first two write `build\bin\0type.exe`; the Parakeet build also drops the she
 - **Output:** paste as you speak (each pause becomes a paste), or paste once when you stop.
 - **Microphone:** use the system default or pick a specific input device.
 - **Start with Windows:** launch 0type at login.
-- **Transcription:** local Parakeet, or Groq's Whisper with a [Groq API key](https://console.groq.com/keys). Audio goes to Groq.
-- **Cleanup:** local Qwen, or a model of your choice on [OpenRouter](https://openrouter.ai/keys) with your key. Transcripts go to OpenRouter. Bigger models are better at working out what you meant when the recognizer mishears a word.
+- **Transcription:** local Parakeet, or a speech-to-text model on OpenRouter (default `openai/whisper-large-v3-turbo`). Audio goes to OpenRouter.
+- **Cleanup:** local Qwen, or a chat model on OpenRouter (default `anthropic/claude-haiku-4.5`). Transcripts go to OpenRouter. Bigger models are better at working out what you meant when the recognizer mishears a word.
+- **OpenRouter API key:** one [key](https://openrouter.ai/keys) serves both cloud options.
 - **Models:** download or re-download Parakeet and Qwen.
 
 Keys are saved in `%APPDATA%\0type\config.json`, readable only by your Windows account.
@@ -95,7 +96,7 @@ One Go module. The console and the GUI share the engine in `internal/app`; each 
 internal/
   hotkey/     global keyboard+mouse hook, rebinding, capture   (raw Win32)
   audio/      winmm microphone capture -> WAV                  (raw Win32)
-  transcribe/ Parakeet (sherpa-onnx, cgo) | Groq | stub
+  transcribe/ Parakeet (sherpa-onnx, cgo) | OpenRouter | stub
   cleanup/    Qwen via an OpenAI-compatible endpoint
   inject/     clipboard paste                                  (raw Win32)
   overlay/    cursor dot: red recording, blue processing       (raw Win32)

@@ -15,6 +15,7 @@ import (
 	"github.com/saadih/0type/internal/cleanup"
 	"github.com/saadih/0type/internal/hotkey"
 	"github.com/saadih/0type/internal/models"
+	"github.com/saadih/0type/internal/transcribe"
 	"github.com/saadih/0type/internal/tray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -31,12 +32,13 @@ type Settings struct {
 	InputDevice string         `json:"inputDevice"` // microphone name; "" = system default
 	Output      string         `json:"output"`      // "live" (paste as you speak, default) | "end" (paste on release)
 
-	Transcriber string `json:"transcriber"` // "local" (Parakeet, default) | "groq"
-	GroqKey     string `json:"groqApiKey"`
+	OpenRouterKey string `json:"openrouterApiKey"` // one key for both cloud options
 
-	Cleaner         string `json:"cleaner"` // "local" (Qwen, default) | "openrouter"
-	OpenRouterKey   string `json:"openrouterApiKey"`
-	OpenRouterModel string `json:"openrouterModel"` // "" = cleanup.DefaultCloudModel
+	Transcriber        string `json:"transcriber"`        // "local" (Parakeet, default) | "openrouter"
+	TranscriptionModel string `json:"transcriptionModel"` // "" = transcribe.DefaultOpenRouterModel
+
+	Cleaner      string `json:"cleaner"`      // "local" (Qwen, default) | "openrouter"
+	CleanupModel string `json:"cleanupModel"` // "" = cleanup.DefaultCloudModel
 }
 
 func defaultSettings() Settings {
@@ -50,11 +52,8 @@ func (s Settings) live() bool { return s.Output != "end" }
 // validate rejects a cloud choice without the key it needs, so a save never
 // silently falls back to local.
 func (s Settings) validate() error {
-	if s.Transcriber == "groq" && s.GroqKey == "" {
-		return fmt.Errorf("enter a Groq API key, or switch transcription back to local")
-	}
-	if s.Cleaner == "openrouter" && s.OpenRouterKey == "" {
-		return fmt.Errorf("enter an OpenRouter API key, or switch cleanup back to local")
+	if (s.Transcriber == "openrouter" || s.Cleaner == "openrouter") && s.OpenRouterKey == "" {
+		return fmt.Errorf("enter an OpenRouter API key, or switch back to local")
 	}
 	return nil
 }
@@ -117,16 +116,16 @@ func (a *App) trayQuit() {
 func (a *App) startEngine() {
 	s := a.GetSettings()
 	a.engine = app.New(app.Config{
-		Transcription: s.Transcriber,
-		GroqAPIKey:    s.GroqKey,
-		Cleanup:       s.Cleaner,
-		CleanupAPIKey: s.OpenRouterKey,
-		CleanupModel:  s.OpenRouterModel,
-		Live:          s.live(),
-		Binding:       s.Trigger,
-		Mode:          s.Mode,
-		InputDevice:   s.InputDevice,
-		Notify:        a.notify,
+		OpenRouterAPIKey:   s.OpenRouterKey,
+		Transcription:      s.Transcriber,
+		TranscriptionModel: s.TranscriptionModel,
+		Cleanup:            s.Cleaner,
+		CleanupModel:       s.CleanupModel,
+		Live:               s.live(),
+		Binding:            s.Trigger,
+		Mode:               s.Mode,
+		InputDevice:        s.InputDevice,
+		Notify:             a.notify,
 	}, nil)
 	_ = a.engine.Start()
 }
@@ -143,9 +142,14 @@ func (a *App) GetSettings() Settings {
 	return a.settings
 }
 
-// DefaultCloudModel is the OpenRouter model used when the field is left blank
-// (shown as the input's placeholder).
-func (a *App) DefaultCloudModel() string { return cleanup.DefaultCloudModel }
+// DefaultModels returns the OpenRouter models used when a model field is left
+// blank (shown as the inputs' placeholders).
+func (a *App) DefaultModels() map[string]string {
+	return map[string]string{
+		"transcription": transcribe.DefaultOpenRouterModel,
+		"cleanup":       cleanup.DefaultCloudModel,
+	}
+}
 
 // SaveSettings persists the settings edited in the window and applies the mode,
 // microphone, output style, and backends live. The trigger applies live via
@@ -162,8 +166,8 @@ func (a *App) SaveSettings(s Settings) error {
 		a.engine.SetMode(s.Mode)
 		a.engine.SetInputDevice(s.InputDevice)
 		a.engine.SetLive(s.live())
-		a.engine.SetTranscription(s.Transcriber, s.GroqKey)
-		a.engine.SetCleanup(s.Cleaner, s.OpenRouterKey, s.OpenRouterModel)
+		a.engine.SetTranscription(s.Transcriber, s.OpenRouterKey, s.TranscriptionModel)
+		a.engine.SetCleanup(s.Cleaner, s.OpenRouterKey, s.CleanupModel)
 	}
 	return a.save()
 }

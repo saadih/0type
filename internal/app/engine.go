@@ -28,21 +28,24 @@ const minSpeechBytes = audio.BytesPerSecond * 15 / 100
 
 // Config selects the backends and the initial trigger binding.
 type Config struct {
+	// OpenRouterAPIKey unlocks the hosted backends below; both stages share it.
+	OpenRouterAPIKey string
+
 	// Transcription picks the backend: "local" (Parakeet, the default) or
-	// "groq" (Groq's hosted Whisper, which needs GroqAPIKey). Without a usable
-	// choice the engine falls back to Parakeet if downloaded, else the stub
-	// (AllowStub) or a placeholder that asks for a model download.
-	Transcription string
-	GroqAPIKey    string
+	// "openrouter" (a hosted speech-to-text model; TranscriptionModel is
+	// optional). Without a usable choice the engine falls back to Parakeet if
+	// downloaded, else the stub (AllowStub) or a placeholder that asks for a
+	// model download.
+	Transcription      string
+	TranscriptionModel string
 
 	// Cleanup picks the backend: "local" (the bundled Qwen server, the default)
-	// or "openrouter" (a hosted model via OpenRouter, which needs CleanupAPIKey;
-	// CleanupModel is optional). CleanupURL points local cleanup at an existing
-	// OpenAI-compatible server instead of the bundled one.
-	Cleanup       string
-	CleanupAPIKey string
-	CleanupModel  string
-	CleanupURL    string
+	// or "openrouter" (a hosted chat model; CleanupModel is optional).
+	// CleanupURL points local cleanup at an existing OpenAI-compatible server
+	// instead of the bundled one.
+	Cleanup      string
+	CleanupModel string
+	CleanupURL   string
 
 	// Live pastes as you speak: the recording is cut at pauses and each piece
 	// is transcribed, cleaned, and pasted while the mic stays open.
@@ -79,7 +82,7 @@ type Engine struct {
 	asr         transcribe.Transcriber // active backend
 	baseASR     transcribe.Transcriber // stub or "download a model" placeholder
 	localASR    transcribe.Transcriber // Parakeet, once loaded
-	cloudASR    transcribe.Transcriber // Groq, when a key is set
+	cloudASR    transcribe.Transcriber // OpenRouter, when a key is set
 	useCloudASR bool
 
 	cleanMu       sync.Mutex // guards the cleaner fields and srv
@@ -152,10 +155,10 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 			}
 		}
 	}
-	if cfg.GroqAPIKey != "" {
-		e.cloudASR = transcribe.NewGroq(cfg.GroqAPIKey)
+	if cfg.OpenRouterAPIKey != "" {
+		e.cloudASR = transcribe.NewOpenRouter(cfg.OpenRouterAPIKey, cfg.TranscriptionModel)
 	}
-	e.useCloudASR = cfg.Transcription == "groq" && e.cloudASR != nil
+	e.useCloudASR = cfg.Transcription == "openrouter" && e.cloudASR != nil
 	e.refreshASR()
 
 	// Cleanup: an explicit local URL is used as-is; the bundled server fills
@@ -163,8 +166,8 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 	if cfg.CleanupURL != "" {
 		e.localClean = cleanup.NewLLM(cfg.CleanupURL)
 	}
-	if cfg.CleanupAPIKey != "" {
-		e.cloudClean = cleanup.NewCloud(cleanup.OpenRouterURL, cfg.CleanupAPIKey, cfg.CleanupModel)
+	if cfg.OpenRouterAPIKey != "" {
+		e.cloudClean = cleanup.NewCloud(cleanup.OpenRouterURL, cfg.OpenRouterAPIKey, cfg.CleanupModel)
 	}
 	e.useCloudClean = cfg.Cleanup == "openrouter" && e.cloudClean != nil
 	e.refreshClean()
@@ -224,17 +227,18 @@ func (e *Engine) refreshClean() {
 	}
 }
 
-// SetTranscription switches between local Parakeet ("local") and Groq's hosted
-// Whisper ("groq", with its API key) live. An empty key falls back to local.
-func (e *Engine) SetTranscription(kind, groqKey string) {
+// SetTranscription switches between local Parakeet ("local") and a hosted
+// speech-to-text model via OpenRouter ("openrouter", with the API key and an
+// optional model) live. An empty key falls back to local.
+func (e *Engine) SetTranscription(kind, apiKey, model string) {
 	e.asrMu.Lock()
 	defer e.asrMu.Unlock()
-	if groqKey != "" {
-		e.cloudASR = transcribe.NewGroq(groqKey)
+	if apiKey != "" {
+		e.cloudASR = transcribe.NewOpenRouter(apiKey, model)
 	} else {
 		e.cloudASR = nil
 	}
-	e.useCloudASR = kind == "groq" && e.cloudASR != nil
+	e.useCloudASR = kind == "openrouter" && e.cloudASR != nil
 	e.refreshASR()
 }
 
