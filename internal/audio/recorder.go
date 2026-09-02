@@ -1,14 +1,16 @@
 // Package audio captures microphone input during a dictation.
 //
-// The real implementation uses miniaudio (malgo) to capture 16 kHz mono 16-bit
-// PCM — the format Parakeet expects.
+// The Windows implementation uses winmm (waveIn) to capture 16 kHz mono 16-bit
+// PCM (the format Parakeet expects) into a ring of small buffers, so a
+// recording can run for as long as the speaker likes and, through Streaming,
+// be handed out while it is still in progress.
 package audio
 
 // Recorder captures microphone audio between Start and Stop.
 type Recorder interface {
 	Start() error
 	// Stop ends capture and returns a complete WAV file (16 kHz mono 16-bit PCM
-	// in a RIFF container) — the format transcribers accept.
+	// in a RIFF container), the format transcribers accept.
 	Stop() ([]byte, error)
 }
 
@@ -18,7 +20,18 @@ type DeviceSelector interface {
 	SetInputDevice(name string)
 }
 
-// Stub returns empty audio — enough to exercise the pipeline.
+// Streaming is an optional Recorder capability: delivering audio while it is
+// being captured. fn receives each new chunk of raw 16 kHz mono 16-bit PCM (no
+// WAV header) in order, from the recorder's own goroutine. Every byte passed to
+// fn also ends up in the WAV that Stop returns, in the same order, and Stop
+// flushes the last chunks through fn before returning, so a caller can slice
+// Stop's PCM by the byte offsets it has already consumed. fn must return
+// promptly. Set it before Start; nil disables streaming.
+type Streaming interface {
+	OnAudio(fn func(pcm []byte))
+}
+
+// Stub returns empty audio, enough to exercise the pipeline.
 type Stub struct{}
 
 // NewStub returns a no-op recorder.

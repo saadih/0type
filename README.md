@@ -2,10 +2,11 @@
 
 > no typing allowed
 
-Hold a button, talk, and your cleaned-up words appear in whatever app you're using. 0type binds push-to-talk dictation to your mouse, runs speech recognition and text cleanup on your own machine, and pastes into any window. Nothing leaves your computer.
+Hold a button, talk, and your cleaned-up words appear in whatever app you're using. 0type binds push-to-talk dictation to your mouse, runs speech recognition and text cleanup on your own machine, and pastes into any window. Nothing leaves your computer unless you opt into a cloud backend.
 
 ```
 hold trigger → record → Parakeet (local) → Qwen (local) → paste at cursor
+                 ↳ at every pause, the piece so far is transcribed, cleaned, and pasted
 ```
 
 ## Why
@@ -13,7 +14,8 @@ hold trigger → record → Parakeet (local) → Qwen (local) → paste at curso
 Most dictation tools can't bind to a mouse button, ship your audio to a server, or wrap a simple loop in features you never asked for. 0type keeps the loop small:
 
 - **Binds to your mouse.** Global push-to-talk on a side button (MB4/MB5), which Electron's `globalShortcut` can't reach. Rebind it live to any key or button.
-- **Runs on your machine.** Parakeet handles transcription, Qwen3-4B-Instruct handles cleanup, both downloaded on demand.
+- **Runs on your machine.** Parakeet handles transcription, Qwen3-4B-Instruct handles cleanup, both downloaded on demand. If your machine is slow, or you want a bigger model catching misheard words, point either stage at the cloud (Groq Whisper, OpenRouter) with your own key.
+- **Pastes as you speak.** Each pause becomes a paste, so a long dictation lands while you talk instead of after. Recordings have no length limit.
 - **Small.** An 11 MB native binary over WebView2. Electron apps run ten times that. The hook, audio capture, and overlay are plain Go with no bundled browser.
 - **Focused.** One window that tucks into the system tray, a cursor dot, a few settings.
 
@@ -22,9 +24,9 @@ Most dictation tools can't bind to a mouse button, ship your audio to a server, 
 | Stage | How |
 |---|---|
 | Trigger | Global low-level hook, rebindable to any key or mouse side/middle button, applied live |
-| Capture | Microphone via `winmm` (no CGO) |
-| Transcribe | Parakeet TDT 0.6B v3 via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), 25 European languages including Swedish |
-| Clean up | Qwen3-4B-Instruct via a bundled [llama.cpp](https://github.com/ggml-org/llama.cpp) server: drops filler, fixes punctuation, keeps your wording |
+| Capture | Microphone via `winmm` (no CGO), any length; pauses split it into pieces on the fly |
+| Transcribe | Parakeet TDT 0.6B v3 via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), 25 European languages including Swedish; or Groq's hosted Whisper |
+| Clean up | Qwen3-4B-Instruct via a bundled [llama.cpp](https://github.com/ggml-org/llama.cpp) server: drops filler, fixes punctuation, repairs misheard words ("I say at the computer" → "I sit at the computer"), keeps your wording; or any model on OpenRouter |
 | Inject | Clipboard paste, which handles å/ä/ö and emoji |
 | Feedback | A dot that follows your cursor: red while recording, blue while it transcribes and cleans up |
 
@@ -74,9 +76,14 @@ The first two write `build\bin\0type.exe`; the Parakeet build also drops the she
 
 - **Trigger:** click Rebind, then press any key or mouse button. Pick something you don't type, like an F-key, a side button, Right Ctrl, or Caps Lock.
 - **Mode:** hold to talk, or tap to toggle.
+- **Output:** paste as you speak (each pause becomes a paste), or paste once when you stop.
 - **Microphone:** use the system default or pick a specific input device.
 - **Start with Windows:** launch 0type at login.
+- **Transcription:** local Parakeet, or Groq's Whisper with a [Groq API key](https://console.groq.com/keys). Audio goes to Groq.
+- **Cleanup:** local Qwen, or a model of your choice on [OpenRouter](https://openrouter.ai/keys) with your key. Transcripts go to OpenRouter. Bigger models are better at working out what you meant when the recognizer mishears a word.
 - **Models:** download or re-download Parakeet and Qwen.
+
+Keys are saved in `%APPDATA%\0type\config.json`, readable only by your Windows account.
 
 Closing the window hides 0type to the system tray, where it keeps listening. Right-click the tray icon for Open or Quit.
 

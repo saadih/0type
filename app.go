@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/saadih/0type/internal/app"
 	"github.com/saadih/0type/internal/audio"
 	"github.com/saadih/0type/internal/autostart"
+	"github.com/saadih/0type/internal/cleanup"
 	"github.com/saadih/0type/internal/hotkey"
 	"github.com/saadih/0type/internal/models"
 	"github.com/saadih/0type/internal/tray"
@@ -21,15 +23,40 @@ import (
 const Version = "0.1.2"
 
 // Settings is the user-facing configuration edited in the window and persisted
-// to the OS config dir (%APPDATA%\0type\config.json on Windows).
+// to the OS config dir (%APPDATA%\0type\config.json on Windows). API keys are
+// stored there in plain text, readable only by the user's own account.
 type Settings struct {
 	Trigger     hotkey.Binding `json:"trigger"`
 	Mode        string         `json:"mode"`        // "hold" | "toggle"
 	InputDevice string         `json:"inputDevice"` // microphone name; "" = system default
+	Output      string         `json:"output"`      // "live" (paste as you speak, default) | "end" (paste on release)
+
+	Transcriber string `json:"transcriber"` // "local" (Parakeet, default) | "groq"
+	GroqKey     string `json:"groqApiKey"`
+
+	Cleaner         string `json:"cleaner"` // "local" (Qwen, default) | "openrouter"
+	OpenRouterKey   string `json:"openrouterApiKey"`
+	OpenRouterModel string `json:"openrouterModel"` // "" = cleanup.DefaultCloudModel
 }
 
 func defaultSettings() Settings {
-	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold"}
+	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold", Output: "live", Transcriber: "local", Cleaner: "local"}
+}
+
+// live reports whether the settings ask for paste-as-you-speak. Configs written
+// before the option existed have no "output" field and get the default.
+func (s Settings) live() bool { return s.Output != "end" }
+
+// validate rejects a cloud choice without the key it needs, so a save never
+// silently falls back to local.
+func (s Settings) validate() error {
+	if s.Transcriber == "groq" && s.GroqKey == "" {
+		return fmt.Errorf("enter a Groq API key, or switch transcription back to local")
+	}
+	if s.Cleaner == "openrouter" && s.OpenRouterKey == "" {
+		return fmt.Errorf("enter an OpenRouter API key, or switch cleanup back to local")
+	}
+	return nil
 }
 
 // App is the Wails backend bound to the frontend.
@@ -90,10 +117,16 @@ func (a *App) trayQuit() {
 func (a *App) startEngine() {
 	s := a.GetSettings()
 	a.engine = app.New(app.Config{
-		Binding:     s.Trigger,
-		Mode:        s.Mode,
-		InputDevice: s.InputDevice,
-		Notify:      a.notify,
+		Transcription: s.Transcriber,
+		GroqAPIKey:    s.GroqKey,
+		Cleanup:       s.Cleaner,
+		CleanupAPIKey: s.OpenRouterKey,
+		CleanupModel:  s.OpenRouterModel,
+		Live:          s.live(),
+		Binding:       s.Trigger,
+		Mode:          s.Mode,
+		InputDevice:   s.InputDevice,
+		Notify:        a.notify,
 	}, nil)
 	_ = a.engine.Start()
 }
@@ -110,16 +143,27 @@ func (a *App) GetSettings() Settings {
 	return a.settings
 }
 
-// SaveSettings persists the settings edited in the window and applies the mode
-// and microphone live. The trigger applies live via CaptureBinding; model
-// downloads apply live via DownloadParakeet and DownloadQwen.
+// DefaultCloudModel is the OpenRouter model used when the field is left blank
+// (shown as the input's placeholder).
+func (a *App) DefaultCloudModel() string { return cleanup.DefaultCloudModel }
+
+// SaveSettings persists the settings edited in the window and applies the mode,
+// microphone, output style, and backends live. The trigger applies live via
+// CaptureBinding; model downloads apply live via DownloadParakeet and
+// DownloadQwen.
 func (a *App) SaveSettings(s Settings) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	a.settings = s
 	a.mu.Unlock()
 	if a.engine != nil {
 		a.engine.SetMode(s.Mode)
 		a.engine.SetInputDevice(s.InputDevice)
+		a.engine.SetLive(s.live())
+		a.engine.SetTranscription(s.Transcriber, s.GroqKey)
+		a.engine.SetCleanup(s.Cleaner, s.OpenRouterKey, s.OpenRouterModel)
 	}
 	return a.save()
 }

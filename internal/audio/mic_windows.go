@@ -3,25 +3,26 @@
 package audio
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 const (
-	sampleRate    = 16000
-	channels      = 1
-	bitsPerSample = 16
-	maxSeconds    = 120 // fixed capture buffer: plenty for a dictation
-	maxBytes      = sampleRate * channels * (bitsPerSample / 8) * maxSeconds
+	// The capture ring: 8 buffers of 250 ms. The poll loop refills each one as
+	// soon as the driver fills it, so the ring holds ~2 s of slack while the
+	// recording itself has no length limit.
+	numBuffers  = 8
+	bufferBytes = BytesPerSecond / 4
+	pollEvery   = 20 * time.Millisecond
 
-	waveMapper    = 0xFFFFFFFF // WAVE_MAPPER: let Windows pick the default input
-	callbackNull  = 0
-	waveFormatPCM = 1
+	waveMapper   = 0xFFFFFFFF // WAVE_MAPPER: let Windows pick the default input
+	callbackNull = 0
+	whdrDone     = 0x00000001 // WHDR_DONE: the driver has filled this buffer
 )
 
 var (
@@ -85,16 +86,24 @@ func InputDevices() []string {
 	return names
 }
 
-// Mic records the default microphone via winmm (waveIn) with no CGO. It captures
-// into a single fixed buffer between Start and Stop — simple and robust, enough
-// for a dictation up to maxSeconds.
+// Mic records the microphone via winmm (waveIn) with no CGO. The driver fills a
+// ring of small buffers; a poll goroutine drains each finished buffer into the
+// recording, hands it to the streaming callback, and queues it again. There is
+// no cap on the recording length.
 type Mic struct {
-	mu     sync.Mutex
-	pin    runtime.Pinner
-	hwi    uintptr
-	hdr    wavehdr
-	buf    []byte
-	device string // selected device name; "" = system default
+	mu      sync.Mutex
+	device  string // selected device name; "" = system default
+	onAudio func(pcm []byte)
+
+	// Capture state, valid between Start and Stop.
+	pin  runtime.Pinner
+	hwi  uintptr
+	hdrs []wavehdr // one per ring buffer, pinned for the driver
+	bufs [][]byte
+	next int    // ring index the driver fills next (buffers complete in order)
+	rec  []byte // everything captured so far
+	stop chan struct{}
+	done chan struct{}
 }
 
 // NewMic returns a winmm microphone recorder.
@@ -105,6 +114,14 @@ func NewMic() *Mic { return &Mic{} }
 func (m *Mic) SetInputDevice(name string) {
 	m.mu.Lock()
 	m.device = name
+	m.mu.Unlock()
+}
+
+// OnAudio registers the streaming callback (see Streaming). It applies on the
+// next Start.
+func (m *Mic) OnAudio(fn func(pcm []byte)) {
+	m.mu.Lock()
+	m.onAudio = fn
 	m.mu.Unlock()
 }
 
@@ -145,8 +162,8 @@ func (m *Mic) Start() error {
 	wf := waveformatex{
 		wFormatTag:      waveFormatPCM,
 		nChannels:       channels,
-		nSamplesPerSec:  sampleRate,
-		nAvgBytesPerSec: sampleRate * channels * (bitsPerSample / 8),
+		nSamplesPerSec:  SampleRate,
+		nAvgBytesPerSec: BytesPerSecond,
 		nBlockAlign:     channels * (bitsPerSample / 8),
 		wBitsPerSample:  bitsPerSample,
 	}
@@ -158,36 +175,96 @@ func (m *Mic) Start() error {
 		return fmt.Errorf("waveInOpen: %w", mmErr(r))
 	}
 
-	m.buf = make([]byte, maxBytes)
-	// The audio driver writes to the buffer and header asynchronously through the
-	// raw pointers we hand it, so they must not move or be collected mid-capture.
-	m.pin.Pin(&m.buf[0])
-	m.hdr = wavehdr{lpData: uintptr(unsafe.Pointer(&m.buf[0])), dwBufferLength: uint32(len(m.buf))}
-	m.pin.Pin(&m.hdr)
-
-	hdrSize := unsafe.Sizeof(m.hdr)
-	if r, _, _ := procWaveInPrepareHeader.Call(hwi, uintptr(unsafe.Pointer(&m.hdr)), hdrSize); r != 0 {
-		m.pin.Unpin()
-		procWaveInClose.Call(hwi)
-		return fmt.Errorf("waveInPrepareHeader: %w", mmErr(r))
+	// The driver writes to the buffers and headers asynchronously through the
+	// raw pointers we hand it, so none of them may move or be collected while
+	// capture runs. Pinning one element pins its whole allocation.
+	m.hdrs = make([]wavehdr, numBuffers)
+	m.bufs = make([][]byte, numBuffers)
+	m.pin.Pin(&m.hdrs[0])
+	for i := range m.bufs {
+		m.bufs[i] = make([]byte, bufferBytes)
+		m.pin.Pin(&m.bufs[i][0])
+		m.hdrs[i] = wavehdr{lpData: uintptr(unsafe.Pointer(&m.bufs[i][0])), dwBufferLength: bufferBytes}
 	}
-	if r, _, _ := procWaveInAddBuffer.Call(hwi, uintptr(unsafe.Pointer(&m.hdr)), hdrSize); r != 0 {
-		procWaveInUnprepareHeader.Call(hwi, uintptr(unsafe.Pointer(&m.hdr)), hdrSize)
-		m.pin.Unpin()
+	hdrSize := unsafe.Sizeof(m.hdrs[0])
+	fail := func(stage string, r uintptr) error {
+		procWaveInReset.Call(hwi)
+		for i := range m.hdrs {
+			procWaveInUnprepareHeader.Call(hwi, uintptr(unsafe.Pointer(&m.hdrs[i])), hdrSize)
+		}
 		procWaveInClose.Call(hwi)
-		return fmt.Errorf("waveInAddBuffer: %w", mmErr(r))
+		m.pin.Unpin()
+		m.hdrs, m.bufs = nil, nil
+		return fmt.Errorf("%s: %w", stage, mmErr(r))
+	}
+	for i := range m.hdrs {
+		if r, _, _ := procWaveInPrepareHeader.Call(hwi, uintptr(unsafe.Pointer(&m.hdrs[i])), hdrSize); r != 0 {
+			return fail("waveInPrepareHeader", r)
+		}
+		if r, _, _ := procWaveInAddBuffer.Call(hwi, uintptr(unsafe.Pointer(&m.hdrs[i])), hdrSize); r != 0 {
+			return fail("waveInAddBuffer", r)
+		}
 	}
 	if r, _, _ := procWaveInStart.Call(hwi); r != 0 {
-		procWaveInUnprepareHeader.Call(hwi, uintptr(unsafe.Pointer(&m.hdr)), hdrSize)
-		m.pin.Unpin()
-		procWaveInClose.Call(hwi)
-		return fmt.Errorf("waveInStart: %w", mmErr(r))
+		return fail("waveInStart", r)
 	}
 	m.hwi = hwi
+	m.next = 0
+	m.rec = m.rec[:0]
+	m.stop = make(chan struct{})
+	m.done = make(chan struct{})
+	go m.poll(hwi, m.onAudio, m.stop, m.done)
 	return nil
 }
 
-// Stop ends capture and returns the recording as a WAV file.
+// poll drains finished ring buffers in order and requeues them until stop is
+// closed. It owns hdrs/bufs/rec/next while it runs; Stop joins it before
+// touching them again.
+func (m *Mic) poll(hwi uintptr, onAudio func([]byte), stop, done chan struct{}) {
+	defer close(done)
+	hdrSize := unsafe.Sizeof(m.hdrs[0])
+	t := time.NewTicker(pollEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		for {
+			h := &m.hdrs[m.next]
+			if atomic.LoadUint32(&h.dwFlags)&whdrDone == 0 {
+				break
+			}
+			m.harvest(m.next, onAudio)
+			// Hand the buffer straight back to the driver: it stays prepared,
+			// and waveInAddBuffer clears WHDR_DONE as it requeues it.
+			procWaveInAddBuffer.Call(hwi, uintptr(unsafe.Pointer(h)), hdrSize)
+			m.next = (m.next + 1) % numBuffers
+		}
+	}
+}
+
+// harvest appends ring buffer i's audio to the recording and streams it.
+func (m *Mic) harvest(i int, onAudio func([]byte)) {
+	h := &m.hdrs[i]
+	n := int(h.dwBytesRecorded)
+	h.dwBytesRecorded = 0
+	if n == 0 {
+		return
+	}
+	data := m.bufs[i][:n]
+	m.rec = append(m.rec, data...)
+	if onAudio != nil {
+		chunk := make([]byte, n)
+		copy(chunk, data)
+		onAudio(chunk)
+	}
+}
+
+// Stop ends capture and returns the recording as a WAV file. Audio still in the
+// ring is flushed through the streaming callback first, so the callback has
+// seen every byte of the returned PCM by the time Stop returns.
 func (m *Mic) Stop() ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -195,41 +272,27 @@ func (m *Mic) Stop() ([]byte, error) {
 		return nil, fmt.Errorf("not recording")
 	}
 	hwi := m.hwi
-	hdrSize := unsafe.Sizeof(m.hdr)
+	hdrSize := unsafe.Sizeof(m.hdrs[0])
 
+	close(m.stop)
+	<-m.done
 	procWaveInStop.Call(hwi)
-	procWaveInReset.Call(hwi) // returns the pending buffer and sets dwBytesRecorded
-	n := m.hdr.dwBytesRecorded
-	procWaveInUnprepareHeader.Call(hwi, uintptr(unsafe.Pointer(&m.hdr)), hdrSize)
+	procWaveInReset.Call(hwi) // returns every queued buffer, marked done, in order
+	for range m.hdrs {
+		if atomic.LoadUint32(&m.hdrs[m.next].dwFlags)&whdrDone != 0 {
+			m.harvest(m.next, m.onAudio)
+		}
+		m.next = (m.next + 1) % numBuffers
+	}
+	for i := range m.hdrs {
+		procWaveInUnprepareHeader.Call(hwi, uintptr(unsafe.Pointer(&m.hdrs[i])), hdrSize)
+	}
 	procWaveInClose.Call(hwi)
-
-	wav := encodeWAV(m.buf[:n])
 	m.pin.Unpin()
-	m.buf = nil
+
+	wav := EncodeWAV(m.rec)
+	m.rec = nil
+	m.hdrs, m.bufs = nil, nil
 	m.hwi = 0
 	return wav, nil
-}
-
-// encodeWAV wraps 16 kHz mono 16-bit PCM in a minimal RIFF/WAVE container.
-func encodeWAV(pcm []byte) []byte {
-	var b bytes.Buffer
-	dataLen := uint32(len(pcm))
-	blockAlign := uint16(channels * (bitsPerSample / 8))
-	byteRate := uint32(sampleRate) * uint32(blockAlign)
-
-	b.WriteString("RIFF")
-	binary.Write(&b, binary.LittleEndian, uint32(36+dataLen))
-	b.WriteString("WAVE")
-	b.WriteString("fmt ")
-	binary.Write(&b, binary.LittleEndian, uint32(16))
-	binary.Write(&b, binary.LittleEndian, uint16(waveFormatPCM))
-	binary.Write(&b, binary.LittleEndian, uint16(channels))
-	binary.Write(&b, binary.LittleEndian, uint32(sampleRate))
-	binary.Write(&b, binary.LittleEndian, byteRate)
-	binary.Write(&b, binary.LittleEndian, blockAlign)
-	binary.Write(&b, binary.LittleEndian, uint16(bitsPerSample))
-	b.WriteString("data")
-	binary.Write(&b, binary.LittleEndian, dataLen)
-	b.Write(pcm)
-	return b.Bytes()
 }
