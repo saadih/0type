@@ -78,7 +78,7 @@ The first two write `build\bin\0type.exe`; the Parakeet build also drops the she
 - **Mode:** hold to talk, or tap to toggle.
 - **Output:** paste as you speak (each pause becomes a paste), or paste once when you stop.
 - **Microphone:** use the system default or pick a specific input device.
-- **Start with Windows:** launch 0type at login.
+- **Settings** (top right): start with Windows, and your own OpenRouter model slugs, which appear first in the Recommended pickers.
 - **Transcription:** local Parakeet, or a speech-to-text model on OpenRouter (default `openai/whisper-large-v3-turbo`). Audio goes to OpenRouter.
 - **Cleanup:** local Qwen, or a chat model on OpenRouter (default `anthropic/claude-haiku-4.5`). Transcripts go to OpenRouter. Bigger models are better at working out what you meant when the recognizer mishears a word.
 - **OpenRouter API key:** one [key](https://openrouter.ai/keys) serves both cloud options.

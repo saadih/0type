@@ -4,10 +4,14 @@ import { EventsOn } from '../wailsjs/runtime/runtime';
 
 document.querySelector('#app').innerHTML = `
   <header>
-    <div class="wordmark">0<span>type</span></div>
-    <div class="tagline">no typing allowed</div>
+    <div>
+      <div class="wordmark">0<span>type</span></div>
+      <div class="tagline">no typing allowed</div>
+    </div>
+    <button id="nav" class="ghost small">Settings</button>
   </header>
   <main>
+  <div class="view" id="view-main">
     <label class="field">
       <span>Trigger</span>
       <div class="trigger-row">
@@ -34,10 +38,6 @@ document.querySelector('#app').innerHTML = `
       <select id="mic">
         <option value="">System default</option>
       </select>
-    </label>
-    <label class="field row-field">
-      <span>Start with Windows</span>
-      <input type="checkbox" id="autostart" />
     </label>
 
     <label class="field">
@@ -88,6 +88,31 @@ document.querySelector('#app').innerHTML = `
       </div>
       <div class="bar" id="qwen-bar"><div class="fill" id="qwen-fill"></div></div>
     </div>
+  </div>
+
+  <div class="view off" id="view-settings">
+    <label class="field row-field">
+      <span>Start with Windows</span>
+      <input type="checkbox" id="autostart" />
+    </label>
+    <div class="field">
+      <span>My transcription models <em>— listed first under Recommended</em></span>
+      <ul class="mine" id="mine-transcription"></ul>
+      <div class="add-row">
+        <input type="text" id="add-transcription" placeholder="author/model" autocomplete="off" spellcheck="false" />
+        <button class="ghost" id="add-transcription-btn">Add</button>
+      </div>
+    </div>
+    <div class="field">
+      <span>My cleanup models <em>— listed first under Recommended</em></span>
+      <ul class="mine" id="mine-cleanup"></ul>
+      <div class="add-row">
+        <input type="text" id="add-cleanup" placeholder="author/model" autocomplete="off" spellcheck="false" />
+        <button class="ghost" id="add-cleanup-btn">Add</button>
+      </div>
+    </div>
+    <div class="hint">Slugs are the "author/model" names from openrouter.ai/models. Save to keep changes.</div>
+  </div>
   </main>
   <footer>
     <span id="status"></span>
@@ -99,6 +124,17 @@ document.querySelector('#app').innerHTML = `
 const $ = (id) => document.getElementById(id);
 
 let binding = { kind: 'mouse', code: 4, name: 'Mouse Back' };
+const mine = { transcription: [], cleanup: [] }; // the user's own model slugs
+let recs = { transcription: [], cleanup: [] };   // last recommendations from OpenRouter
+
+// Two views in one window: the main screen, and Settings for the rarely
+// touched things. The header button flips between them.
+function showSettings(on) {
+  $('view-main').classList.toggle('off', on);
+  $('view-settings').classList.toggle('off', !on);
+  $('nav').textContent = on ? '← Back' : 'Settings';
+}
+$('nav').addEventListener('click', () => showSettings($('view-settings').classList.contains('off')));
 
 function human(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(1) + ' GB';
@@ -133,13 +169,18 @@ function syncCloudFields() {
   $('openrouter-fields').classList.toggle('open', stt || llm);
   $('rec-source').classList.toggle('open', stt || llm);
 }
+$('transcriber').addEventListener('change', syncCloudFields);
+$('cleaner').addEventListener('change', syncCloudFields);
 
-// Recommended-model pickers: OpenRouter's rankings, boiled down to a few
-// picks per field. Choosing one fills the model input.
-function fillPicker(id, groups) {
-  const sel = $(id);
+// Recommended-model pickers: the user's own models first, then OpenRouter's
+// rankings boiled down to a few picks. Choosing one fills the model input.
+function fillPicker(kind) {
+  const sel = $(kind + '-pick');
   sel.length = 1;
-  (groups || []).forEach((g) => {
+  const groups = [];
+  if (mine[kind].length) groups.push({ title: 'My models', picks: mine[kind].map((m) => ({ model: m, name: m, detail: 'added by you' })) });
+  groups.push(...(recs[kind] || []));
+  groups.forEach((g) => {
     const og = document.createElement('optgroup');
     og.label = g.title;
     (g.picks || []).forEach((p) => {
@@ -151,28 +192,56 @@ function fillPicker(id, groups) {
     sel.appendChild(og);
   });
 }
-function wirePicker(id, inputId) {
-  $(id).addEventListener('change', (e) => {
+function wirePicker(kind, inputId) {
+  $(kind + '-pick').addEventListener('change', (e) => {
     if (e.target.value) $(inputId).value = e.target.value;
     e.target.value = '';
   });
 }
-wirePicker('transcription-pick', 'transcription-model');
-wirePicker('cleanup-pick', 'cleanup-model');
+wirePicker('transcription', 'transcription-model');
+wirePicker('cleanup', 'cleanup-model');
 
 async function loadRecommendations(refresh) {
   const st = $('rec-status');
   st.textContent = refresh ? 'Refreshing…' : 'Loading recommendations…';
   try {
     const r = await Recommendations(refresh);
-    fillPicker('transcription-pick', r.transcription);
-    fillPicker('cleanup-pick', r.cleanup);
+    recs = { transcription: r.transcription || [], cleanup: r.cleanup || [] };
+    fillPicker('transcription'); fillPicker('cleanup');
     st.textContent = (r.source || 'Source: OpenRouter rankings') + (r.stale ? ' (offline copy)' : '');
   } catch (e) { st.textContent = 'Recommendations unavailable: ' + e; }
 }
 $('rec-refresh').addEventListener('click', (e) => { e.preventDefault(); loadRecommendations(true); });
-$('transcriber').addEventListener('change', syncCloudFields);
-$('cleaner').addEventListener('change', syncCloudFields);
+
+// The user's own models (Settings page): a list per stage with add/remove.
+function renderMine(kind) {
+  const ul = $('mine-' + kind);
+  ul.innerHTML = '';
+  mine[kind].forEach((m, i) => {
+    const li = document.createElement('li');
+    const code = document.createElement('code'); code.textContent = m;
+    const rm = document.createElement('button'); rm.className = 'ghost small'; rm.textContent = 'Remove';
+    rm.addEventListener('click', () => { mine[kind].splice(i, 1); renderMine(kind); fillPicker(kind); });
+    li.appendChild(code); li.appendChild(rm);
+    ul.appendChild(li);
+  });
+  fillPicker(kind);
+}
+function wireAdd(kind) {
+  const add = () => {
+    const input = $('add-' + kind);
+    const slug = input.value.trim();
+    if (!slug) return;
+    if (!/^[\w.-]+\/[\w.:-]+$/.test(slug)) { flash('Use the author/model form, e.g. openai/whisper-large-v3', false); return; }
+    if (!mine[kind].includes(slug)) mine[kind].push(slug);
+    input.value = '';
+    renderMine(kind);
+  };
+  $('add-' + kind + '-btn').addEventListener('click', add);
+  $('add-' + kind).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+}
+wireAdd('transcription');
+wireAdd('cleanup');
 
 async function loadMics(selected) {
   try {
@@ -199,13 +268,16 @@ async function load() {
   $('cleaner').value = s.cleaner === 'openrouter' ? 'openrouter' : 'local';
   $('cleanup-model').value = s.cleanupModel || '';
   $('openrouter-key').value = s.openrouterApiKey || '';
+  mine.transcription = (s.myTranscriptionModels || []).slice();
+  mine.cleanup = (s.myCleanupModels || []).slice();
+  renderMine('transcription'); renderMine('cleanup');
   try {
     const d = await DefaultModels();
     $('transcription-model').placeholder = d.transcription;
     $('cleanup-model').placeholder = d.cleanup;
   } catch (e) { /* keep "Model" */ }
   syncCloudFields();
-  loadRecommendations(false); // in the background; the picker fills in when it lands
+  loadRecommendations(false); // in the background; the pickers fill in when it lands
   await loadMics(s.inputDevice);
   try { $('autostart').checked = await GetAutostart(); } catch (e) { /* non-Windows */ }
   try { $('version').textContent = 'v' + (await GetVersion()); } catch (e) { /* ignore */ }
@@ -285,6 +357,8 @@ $('save').addEventListener('click', async () => {
     cleaner: $('cleaner').value,
     cleanupModel: $('cleanup-model').value.trim(),
     openrouterApiKey: $('openrouter-key').value.trim(),
+    myTranscriptionModels: mine.transcription.slice(),
+    myCleanupModels: mine.cleanup.slice(),
   };
   try {
     await SaveSettings(s);

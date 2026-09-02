@@ -40,6 +40,11 @@ type Settings struct {
 
 	Cleaner      string `json:"cleaner"`      // "local" (Qwen, default) | "openrouter"
 	CleanupModel string `json:"cleanupModel"` // "" = cleanup.DefaultCloudModel
+
+	// The user's own OpenRouter model slugs, listed first in the Recommended
+	// pickers (settings page).
+	MyTranscriptionModels []string `json:"myTranscriptionModels"`
+	MyCleanupModels       []string `json:"myCleanupModels"`
 }
 
 func defaultSettings() Settings {

@@ -134,3 +134,18 @@ footer {
 .pick { color: var(--muted); font-size: 13px; }
 .hint a { color: var(--accent); text-decoration: none; }
 .hint a:hover { text-decoration: underline; }
+
+/* Header nav + the Settings view */
+header { display: flex; align-items: flex-start; justify-content: space-between; }
+button.small { padding: 6px 10px; font-size: 12px; }
+.view { display: flex; flex-direction: column; gap: 16px; }
+.view.off { display: none; }
+.mine { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mine li {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 6px 6px 12px;
+}
+.mine code { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 13px; }
+.mine:empty::before { content: "None yet."; color: var(--muted); font-size: 13px; }
+.add-row { display: flex; gap: 8px; }
+.add-row input { flex: 1; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 13px; }
