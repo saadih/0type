@@ -63,27 +63,5 @@
       ]
     }
   ],
-  "transcription": [
-    {
-      "title": "Most used",
-      "picks": [
-        {
-          "model": "openai/whisper-large-v3",
-          "name": "OpenAI: Whisper Large V3",
-          "detail": "7.61M requests this week"
-        },
-        {
-          "model": "openai/whisper-large-v3-turbo",
-          "name": "OpenAI: Whisper Large V3 Turbo",
-          "detail": "3.56M requests this week"
-        },
-        {
-          "model": "openai/gpt-4o-mini-transcribe",
-          "name": "OpenAI: GPT-4o Mini Transcribe",
-          "detail": "614.21K requests this week"
-        }
-      ]
-    }
-  ],
   "stale": false
 }

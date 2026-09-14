@@ -29,8 +29,6 @@ func TestBuildRanksAndFilters(t *testing.T) {
 		mk("a/free:free", "a/free-2026", "Free", 40, "0", "0"),
 		mk("a/smart:batch", "a/smart-2026", "Smart (batch)", 60, "0.000005", "0.000025"), // must not shadow a/smart
 		mk("a/nobench", "a/nobench-2026", "NoBench", 0, "0.000001", "0.000001"),
-		mk("s/whisper", "s/whisper", "Whisper", 0, "0.001", "0"),
-		mk("s/parakeet", "s/parakeet-2026", "Parakeet", 0, "0.001", "0"),
 	)
 	perf := []perfModel{
 		{Slug: "a/smart-2026", RequestCount: 100000, Latency: 2000, Throughput: 50},
@@ -41,12 +39,7 @@ func TestBuildRanksAndFilters(t *testing.T) {
 		{Slug: "a/nobench-2026", RequestCount: 100000, Latency: 100, Throughput: 500},
 		{Slug: "a/quiet", RequestCount: 10, Latency: 1, Throughput: 1},
 	}
-	usage := []usageModel{
-		{Permaslug: "s/parakeet-2026", Count: 500},
-		{Permaslug: "s/whisper", Count: 9000},
-		{Permaslug: "s/unknown", Count: 99999},
-	}
-	r := Build(catalog, perf, usage)
+	r := Build(catalog, perf)
 	if len(r.Cleanup) != 3 {
 		t.Fatalf("cleanup groups: %d", len(r.Cleanup))
 	}
@@ -64,9 +57,6 @@ func TestBuildRanksAndFilters(t *testing.T) {
 			}
 		}
 	}
-	if len(r.Transcription) != 1 || len(r.Transcription[0].Picks) != 2 || r.Transcription[0].Picks[0].Model != "s/whisper" {
-		t.Errorf("transcription: %+v", r.Transcription)
-	}
 }
 
 func TestSnapshotParses(t *testing.T) {
@@ -74,8 +64,8 @@ func TestSnapshotParses(t *testing.T) {
 	if err := json.Unmarshal(snapshot, &r); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.Cleanup) != 3 || len(r.Transcription) != 1 {
-		t.Fatalf("snapshot incomplete: %d cleanup groups, %d transcription groups", len(r.Cleanup), len(r.Transcription))
+	if len(r.Cleanup) != 3 {
+		t.Fatalf("snapshot incomplete: %d cleanup groups", len(r.Cleanup))
 	}
 }
 

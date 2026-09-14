@@ -25,7 +25,7 @@ internal/
   app/            the shared dictation engine
   hotkey/         global keyboard+mouse hook, rebinding, capture
   audio/          winmm microphone capture
-  transcribe/     Parakeet (cgo) | OpenRouter | stub
+  transcribe/     Parakeet (cgo) | stub
   recommend/      model shortlists from OpenRouter rankings
   cleanup/        Qwen via an OpenAI-compatible endpoint
   inject/         clipboard paste

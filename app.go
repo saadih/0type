@@ -16,7 +16,6 @@ import (
 	"github.com/saadih/0type/internal/hotkey"
 	"github.com/saadih/0type/internal/models"
 	"github.com/saadih/0type/internal/recommend"
-	"github.com/saadih/0type/internal/transcribe"
 	"github.com/saadih/0type/internal/tray"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -33,10 +32,7 @@ type Settings struct {
 	InputDevice string         `json:"inputDevice"` // microphone name; "" = system default
 	Output      string         `json:"output"`      // "live" (paste as you speak, default) | "end" (paste on release)
 
-	OpenRouterKey string `json:"openrouterApiKey"` // one key for both cloud options
-
-	Transcriber        string `json:"transcriber"`        // "local" (Parakeet, default) | "openrouter"
-	TranscriptionModel string `json:"transcriptionModel"` // "" = transcribe.DefaultOpenRouterModel
+	OpenRouterKey string `json:"openrouterApiKey"` // for hosted cleanup; audio is never sent
 
 	Cleaner      string `json:"cleaner"`      // "local" (Qwen, default) | "openrouter"
 	CleanupModel string `json:"cleanupModel"` // "" = cleanup.DefaultCloudModel
@@ -46,9 +42,8 @@ type Settings struct {
 	Notes string `json:"notes"`
 
 	// The user's own OpenRouter model slugs, listed first in the Recommended
-	// pickers (settings page).
-	MyTranscriptionModels []string `json:"myTranscriptionModels"`
-	MyCleanupModels       []string `json:"myCleanupModels"`
+	// picker (settings page).
+	MyCleanupModels []string `json:"myCleanupModels"`
 }
 
 // maxNotes bounds the About-you note so it always fits the local model's 4k
@@ -56,7 +51,7 @@ type Settings struct {
 const maxNotes = 1500
 
 func defaultSettings() Settings {
-	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold", Output: "live", Transcriber: "local", Cleaner: "local"}
+	return Settings{Trigger: hotkey.DefaultBinding(), Mode: "hold", Output: "live", Cleaner: "local"}
 }
 
 // live reports whether the settings ask for paste-as-you-speak. Configs written
@@ -66,7 +61,7 @@ func (s Settings) live() bool { return s.Output != "end" }
 // validate rejects a cloud choice without the key it needs, so a save never
 // silently falls back to local.
 func (s Settings) validate() error {
-	if (s.Transcriber == "openrouter" || s.Cleaner == "openrouter") && s.OpenRouterKey == "" {
+	if s.Cleaner == "openrouter" && s.OpenRouterKey == "" {
 		return fmt.Errorf("enter an OpenRouter API key, or download a local model in Settings")
 	}
 	if len(s.Notes) > maxNotes {
@@ -90,13 +85,18 @@ func NewApp() *App {
 	return &App{settings: defaultSettings(), path: configPath()}
 }
 
-// startup runs when the window is ready: load settings, start the engine, and
-// install the tray icon.
+// trayTip is the tray icon's resting tooltip, shown once 0type is ready to
+// dictate. While a model is still loading the engine replaces it.
+const trayTip = "0type — no typing allowed"
+
+// startup runs when the window is ready: load settings, install the tray icon,
+// and start the engine. The tray goes first so the engine's opening status
+// lands on an icon that already exists.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.load()
+	tray.Start(trayTip, a.trayOpen, a.trayQuit)
 	a.startEngine()
-	tray.Start("0type — no typing allowed", a.trayOpen, a.trayQuit)
 }
 
 // shutdown stops the bundled cleanup server and removes the tray icon.
@@ -133,23 +133,32 @@ func (a *App) trayQuit() {
 func (a *App) startEngine() {
 	s := a.GetSettings()
 	a.engine = app.New(app.Config{
-		OpenRouterAPIKey:   s.OpenRouterKey,
-		Transcription:      s.Transcriber,
-		TranscriptionModel: s.TranscriptionModel,
-		Cleanup:            s.Cleaner,
-		CleanupModel:       s.CleanupModel,
-		Notes:              s.Notes,
-		Live:               s.live(),
-		Binding:            s.Trigger,
-		Mode:               s.Mode,
-		InputDevice:        s.InputDevice,
-		Notify:             a.notify,
+		OpenRouterAPIKey: s.OpenRouterKey,
+		Cleanup:          s.Cleaner,
+		CleanupModel:     s.CleanupModel,
+		Notes:            s.Notes,
+		Live:             s.live(),
+		Binding:          s.Trigger,
+		Mode:             s.Mode,
+		InputDevice:      s.InputDevice,
+		Notify:           a.notify,
 	}, nil)
 	_ = a.engine.Start()
 }
 
-// notify forwards engine messages to the frontend as a "notice" event.
+// notify forwards engine messages to the frontend as a "notice" event, except
+// for startup status, which belongs on the tray icon: it is a standing fact
+// about whether dictating will work yet, not a one-off message, and the window
+// is usually closed while it is true.
 func (a *App) notify(kind, msg string) {
+	if kind == "status" {
+		if msg == "" {
+			tray.SetTooltip(trayTip)
+			return
+		}
+		tray.SetTooltip("0type — " + msg)
+		return
+	}
 	runtime.EventsEmit(a.ctx, "notice", map[string]string{"kind": kind, "msg": msg})
 }
 
@@ -160,17 +169,16 @@ func (a *App) GetSettings() Settings {
 	return a.settings
 }
 
-// DefaultModels returns the OpenRouter models used when a model field is left
-// blank (shown as the inputs' placeholders).
+// DefaultModels returns the OpenRouter model used when the cleanup model field
+// is left blank (shown as the input's placeholder).
 func (a *App) DefaultModels() map[string]string {
 	return map[string]string{
-		"transcription": transcribe.DefaultOpenRouterModel,
-		"cleanup":       cleanup.DefaultCloudModel,
+		"cleanup": cleanup.DefaultCloudModel,
 	}
 }
 
-// Recommendations returns OpenRouter model shortlists for the two model fields,
-// refreshed from the rankings feeds at most once a day (or now, with refresh),
+// Recommendations returns OpenRouter model shortlists for the cleanup model
+// field, refreshed from the rankings feeds at most once a day (or now, with refresh),
 // from the cache or the embedded snapshot when offline.
 func (a *App) Recommendations(refresh bool) (recommend.Result, error) {
 	return recommend.Get(models.Dir(), refresh)
@@ -191,7 +199,6 @@ func (a *App) SaveSettings(s Settings) error {
 		a.engine.SetMode(s.Mode)
 		a.engine.SetInputDevice(s.InputDevice)
 		a.engine.SetLive(s.live())
-		a.engine.SetTranscription(s.Transcriber, s.OpenRouterKey, s.TranscriptionModel)
 		a.engine.SetNotes(s.Notes)
 		a.engine.SetCleanup(s.Cleaner, s.OpenRouterKey, s.CleanupModel)
 	}

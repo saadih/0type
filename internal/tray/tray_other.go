@@ -8,3 +8,6 @@ func Start(tooltip string, openFn, quitFn func()) {}
 
 // Stop is a no-op off Windows.
 func Stop() {}
+
+// SetTooltip is a no-op off Windows.
+func SetTooltip(s string) {}

@@ -24,7 +24,7 @@ CONVERSIONS:
 
 FORMATTING: bullet lists, numbered steps, paragraph breaks between topics, or email layout — only when it clearly improves readability. Never over-format short dictations.
 
-CONTINUITY: The input may also contain a <previous> block: text that was already written immediately before this transcript. It is context only. Use it to continue naturally — start in lowercase if the transcript continues the previous sentence, keep names and terms spelled the same way — but never repeat, rewrite, or output any of it. If the transcript ends mid-sentence, stop exactly where the speaker stopped: no period, no added words. The rest arrives in the next transcript.
+CONTINUITY: The input may also contain a <previous> block: text that was already written immediately before this transcript. It is context only. Use it to continue naturally — start in lowercase if the transcript continues the previous sentence, keep names and terms spelled the same way — but never repeat, rewrite, or output any of it. The transcript usually BEGINS mid-sentence, with the words that finish the thought <previous> left hanging. Those words are part of the transcript, not part of <previous>: clean them and keep them. Never drop the opening of a transcript because it completes the previous sentence. Every word the speaker said in the transcript must survive into your output. If the transcript ends mid-sentence, stop exactly where the speaker stopped: no period, no added words. The rest arrives in the next transcript.
 
 EXAMPLES:
 Input: um so can you uh send me the report by friday
@@ -47,6 +47,9 @@ Output: Jag sitter vid datorn hela dagen så ryggen gör ont.
 
 Input: <previous>I went to the store</previous> and bought some milk and uh eggs
 Output: and bought some milk and eggs.
+
+Input: <previous>second, the export button does nothing and I think the handler is</previous> never wired up and the third thing is the dark mode toggle resets every time you
+Output: never wired up. And the third thing is the dark mode toggle resets every time you
 
 Input: so I was thinking that we could maybe um move the meeting to
 Output: So I was thinking that we could maybe move the meeting to

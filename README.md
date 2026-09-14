@@ -2,7 +2,7 @@
 
 > no typing allowed
 
-Hold a button, talk, and your cleaned-up words appear in whatever app you're using. 0type binds push-to-talk dictation to your mouse, runs speech recognition and text cleanup on your own machine, and pastes into any window. Nothing leaves your computer unless you opt into a cloud backend.
+Hold a button, talk, and your cleaned-up words appear in whatever app you're using. 0type binds push-to-talk dictation to your mouse, runs speech recognition and text cleanup on your own machine, and pastes into any window. Your voice never leaves your computer. Only the cleaned-up text does, and only if you point cleanup at a cloud model.
 
 ```
 hold trigger → record → Parakeet (local) → Qwen (local) → paste at cursor
@@ -14,7 +14,7 @@ hold trigger → record → Parakeet (local) → Qwen (local) → paste at curso
 Most dictation tools can't bind to a mouse button, ship your audio to a server, or wrap a simple loop in features you never asked for. 0type keeps the loop small:
 
 - **Binds to your mouse.** Global push-to-talk on a side button (MB4/MB5), which Electron's `globalShortcut` can't reach. Rebind it live to any key or button.
-- **Runs on your machine.** Parakeet handles transcription, Qwen3-4B-Instruct handles cleanup, both downloaded on demand. If your machine is slow, or you want a bigger model catching misheard words, point either stage at OpenRouter with your own key.
+- **Runs on your machine.** Parakeet handles transcription, Qwen3-4B-Instruct handles cleanup, both downloaded on demand. Transcription is always local, so your audio never leaves. If cleanup is sluggish on your hardware, or you want a bigger model catching misheard words, point that one stage at OpenRouter with your own key.
 - **Pastes as you speak.** Each pause becomes a paste, so a long dictation lands while you talk instead of after. Recordings have no length limit.
 - **Small.** An 11 MB native binary over WebView2. Electron apps run ten times that. The hook, audio capture, and overlay are plain Go with no bundled browser.
 - **Focused.** One window that tucks into the system tray, a cursor dot, a few settings.
@@ -25,7 +25,7 @@ Most dictation tools can't bind to a mouse button, ship your audio to a server, 
 |---|---|
 | Trigger | Global low-level hook, rebindable to any key or mouse side/middle button, applied live |
 | Capture | Microphone via `winmm` (no CGO), any length; pauses split it into pieces on the fly |
-| Transcribe | Parakeet TDT 0.6B v3 via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), 25 European languages including Swedish; or any speech-to-text model on OpenRouter |
+| Transcribe | Parakeet TDT 0.6B v3 via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), 25 European languages including Swedish. Always local |
 | Clean up | Qwen3-4B-Instruct via a bundled [llama.cpp](https://github.com/ggml-org/llama.cpp) server: drops filler, fixes punctuation, repairs misheard words ("I say at the computer" → "I sit at the computer"), keeps your wording; or any model on OpenRouter |
 | Inject | Clipboard paste, which handles å/ä/ö and emoji |
 | Feedback | A dot that follows your cursor: red while recording, blue while it transcribes and cleans up |
@@ -60,7 +60,7 @@ You need:
 Three builds:
 
 ```powershell
-# CGO-free, no local transcription (dev/CI, or a cloud fallback)
+# CGO-free, so this build cannot transcribe at all (dev/CI only)
 wails build
 
 # Local Parakeet transcription (CGO + sherpa-onnx), copies its DLLs
@@ -77,7 +77,7 @@ The first two write `build\bin\0type.exe`; the Parakeet build also drops the she
 The main screen holds what you touch while dictating:
 
 - **Trigger:** click Rebind, then press any key or mouse button. Pick something you don't type, like an F-key, a side button, Right Ctrl, or Caps Lock.
-- **Transcription** and **Cleanup:** local or OpenRouter. A local option appears once its model is downloaded in Settings. Cloud needs one [OpenRouter API key](https://openrouter.ai/keys) for both; audio and transcripts then leave your machine. Each cloud model field has a Recommended picker fed by [OpenRouter's rankings](https://openrouter.ai/rankings) (best value, fastest, smartest for cleanup; the three most used for transcription), refreshed daily and available offline from a bundled copy.
+- **Cleanup:** local Qwen or OpenRouter. The local option appears once the model is downloaded in Settings. Cloud needs an [OpenRouter API key](https://openrouter.ai/keys), and your transcripts then leave your machine. It is a fallback for hardware that struggles with a 4B model, not a speed-up: on anything that runs the local model comfortably the network round trip costs more time than the bigger model saves. The model field has a Recommended picker fed by [OpenRouter's rankings](https://openrouter.ai/rankings) (best value, fastest, smartest), refreshed daily and available offline from a bundled copy.
 - **About you:** a short note to the cleanup model. Names and words to spell right, preferences to follow. Sent with every cleanup request, so it goes to OpenRouter when cleanup is in the cloud.
 
 Settings (top right) holds the rest:
@@ -87,7 +87,7 @@ Settings (top right) holds the rest:
 - **Microphone:** use the system default or pick a specific input device.
 - **Start with Windows:** launch 0type at login.
 - **Models:** download or re-download Parakeet and Qwen.
-- **My models:** your own OpenRouter slugs, listed first in the Recommended pickers.
+- **My models:** your own OpenRouter slugs, listed first in the Recommended picker.
 
 Keys are saved in `%APPDATA%\0type\config.json`, readable only by your Windows account.
 
@@ -99,7 +99,7 @@ One Go module. The console and the GUI share the engine in `internal/app`; each 
 internal/
   hotkey/     global keyboard+mouse hook, rebinding, capture   (raw Win32)
   audio/      winmm microphone capture -> WAV                  (raw Win32)
-  transcribe/ Parakeet (sherpa-onnx, cgo) | OpenRouter | stub
+  transcribe/ Parakeet (sherpa-onnx, cgo) | stub
   cleanup/    Qwen via an OpenAI-compatible endpoint
   inject/     clipboard paste                                  (raw Win32)
   overlay/    cursor dot: red recording, blue processing       (raw Win32)

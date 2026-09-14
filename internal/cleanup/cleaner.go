@@ -9,7 +9,10 @@
 // either, cleanup falls back to a pass-through.
 package cleanup
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 // Cleaner rewrites a raw transcript into clean text.
 type Cleaner interface {
@@ -38,3 +41,19 @@ func NewNoop() *Noop { return &Noop{} }
 
 // Clean returns the transcript unchanged.
 func (n *Noop) Clean(raw, prev string) (string, error) { return raw, nil }
+
+// ErrNotReady means the bundled cleanup server is still starting. Clean
+// returns the transcript unchanged alongside it, so the engine pastes the raw
+// text and can say why it was not cleaned instead of degrading in silence.
+var ErrNotReady = errors.New("cleanup model still starting")
+
+// Starting stands in while the bundled server loads its model, which takes
+// longer than the first dictation usually does. It passes the transcript
+// through and reports ErrNotReady.
+type Starting struct{}
+
+// NewStarting returns a pass-through cleaner that reports ErrNotReady.
+func NewStarting() *Starting { return &Starting{} }
+
+// Clean returns the transcript unchanged, with ErrNotReady.
+func (s *Starting) Clean(raw, prev string) (string, error) { return raw, ErrNotReady }

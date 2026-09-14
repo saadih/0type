@@ -1,7 +1,6 @@
 // Package recommend turns OpenRouter's public rankings into short model
-// shortlists for the settings window: for cleanup, the best value, fastest,
-// and smartest chat models; for transcription, the three most used
-// speech-to-text models. It refreshes itself from the feeds behind
+// shortlists for the settings window: the best value, fastest, and smartest
+// chat models to clean transcripts with. It refreshes itself from the feeds behind
 // openrouter.ai/rankings, caches the result for a day, and falls back to an
 // embedded snapshot when offline.
 //
@@ -24,15 +23,12 @@ import (
 	"time"
 )
 
-// Feeds. The first two are the documented catalog; the others are the JSON
-// the rankings page itself loads (undocumented, so a refresh that finds them
-// missing or reshaped fails as a whole and the cache/snapshot stands).
+// Feeds. The first is the documented catalog; the second is the JSON the
+// rankings page itself loads (undocumented, so a refresh that finds it missing
+// or reshaped fails as a whole and the cache/snapshot stands).
 const (
-	modelsURL = "https://openrouter.ai/api/v1/models"
-	// The default catalog omits transcription-only models; they have their own listing.
-	sttModelsURL     = "https://openrouter.ai/api/v1/models?output_modalities=transcription"
-	performanceURL   = "https://openrouter.ai/api/frontend/v1/rankings/performance"
-	transcriptionURL = "https://openrouter.ai/api/frontend/v1/rankings/modality-models?routeSegment=transcription&view=week"
+	modelsURL      = "https://openrouter.ai/api/v1/models"
+	performanceURL = "https://openrouter.ai/api/frontend/v1/rankings/performance"
 
 	cacheFile = "recommendations.json"
 	maxAge    = 24 * time.Hour
@@ -63,10 +59,9 @@ type Group struct {
 
 // Result is what the settings window shows.
 type Result struct {
-	AsOf          string  `json:"asOf"`   // RFC 3339; a string so the Wails binding generator can type it
-	Source        string  `json:"source"` // CC BY 4.0 attribution line
-	Cleanup       []Group `json:"cleanup"`
-	Transcription []Group `json:"transcription"`
+	AsOf    string  `json:"asOf"`   // RFC 3339; a string so the Wails binding generator can type it
+	Source  string  `json:"source"` // CC BY 4.0 attribution line
+	Cleanup []Group `json:"cleanup"`
 	// Stale is set when a refresh failed and this came from the cache or the
 	// embedded snapshot instead.
 	Stale bool `json:"stale"`
@@ -143,46 +138,34 @@ type perfModel struct {
 	Throughput   float64 `json:"p50_throughput"`
 }
 
-// Transcription usage rows: weekly request count per model.
-type usageModel struct {
-	Permaslug string  `json:"model_permaslug"`
-	Count     int64   `json:"count"`
-	Change    float64 `json:"change"`
-}
-
 // Fetch pulls the feeds and computes fresh recommendations.
 func Fetch(ctx context.Context) (Result, error) {
 	var (
-		wg           sync.WaitGroup
-		catalog, stt struct {
+		wg      sync.WaitGroup
+		catalog struct {
 			Data []catalogModel `json:"data"`
 		}
 		perf struct {
 			Data []perfModel `json:"data"`
 		}
-		usage struct {
-			Data []usageModel `json:"data"`
-		}
-		catErr, sttErr, perfErr, usageErr error
+		catErr, perfErr error
 	)
-	wg.Add(4)
+	wg.Add(2)
 	go func() { defer wg.Done(); catErr = getJSON(ctx, modelsURL, &catalog) }()
-	go func() { defer wg.Done(); sttErr = getJSON(ctx, sttModelsURL, &stt) }()
 	go func() { defer wg.Done(); perfErr = getJSON(ctx, performanceURL, &perf) }()
-	go func() { defer wg.Done(); usageErr = getJSON(ctx, transcriptionURL, &usage) }()
 	wg.Wait()
-	// Any feed missing means a half-empty result; better to keep serving the
+	// Either feed missing means a half-empty result; better to keep serving the
 	// last complete one than to cache a hole for a day.
-	for _, err := range []error{catErr, sttErr, perfErr, usageErr} {
+	for _, err := range []error{catErr, perfErr} {
 		if err != nil {
 			return Result{}, err
 		}
 	}
-	r := Build(append(catalog.Data, stt.Data...), perf.Data, usage.Data)
-	if len(r.Cleanup) != 3 || len(r.Transcription) != 1 {
+	r := Build(catalog.Data, perf.Data)
+	if len(r.Cleanup) != 3 {
 		return Result{}, fmt.Errorf("rankings feeds returned no usable rows (shape changed?)")
 	}
-	for _, g := range append(r.Cleanup, r.Transcription...) {
+	for _, g := range r.Cleanup {
 		if len(g.Picks) == 0 {
 			return Result{}, fmt.Errorf("rankings feed for %q returned no usable rows", g.Title)
 		}
@@ -233,7 +216,7 @@ func trim(f float64) string {
 
 // Build computes the lists from already-fetched feed rows. Exported for tests
 // and the snapshot generator.
-func Build(catalog []catalogModel, perf []perfModel, usage []usageModel) Result {
+func Build(catalog []catalogModel, perf []perfModel) Result {
 	now := time.Now().UTC()
 	r := Result{
 		AsOf:   now.Format(time.RFC3339),
@@ -296,25 +279,6 @@ func Build(catalog []catalogModel, perf []perfModel, usage []usageModel) Result 
 		}
 	}
 
-	// Transcription: the three most used speech-to-text models this week.
-	var stt []usageModel
-	for _, u := range usage {
-		if _, ok := resolve(u.Permaslug); ok {
-			stt = append(stt, u)
-		}
-	}
-	sort.SliceStable(stt, func(i, j int) bool { return stt[i].Count > stt[j].Count })
-	var picks []Pick
-	for _, u := range stt {
-		if len(picks) == 3 {
-			break
-		}
-		m, _ := resolve(u.Permaslug)
-		picks = append(picks, Pick{Model: m.ID, Name: m.Name, Detail: fmt.Sprintf("%s requests this week", human(u.Count))})
-	}
-	if len(picks) > 0 {
-		r.Transcription = []Group{{Title: "Most used", Picks: picks}}
-	}
 	return r
 }
 
@@ -348,15 +312,4 @@ func has(xs []string, s string) bool {
 		}
 	}
 	return false
-}
-
-func human(n int64) string {
-	switch {
-	case n >= 1_000_000:
-		return trim(float64(n)/1e6) + "M"
-	case n >= 1_000:
-		return trim(float64(n)/1e3) + "K"
-	default:
-		return strconv.FormatInt(n, 10)
-	}
 }

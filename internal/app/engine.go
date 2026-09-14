@@ -28,16 +28,9 @@ const minSpeechBytes = audio.BytesPerSecond * 15 / 100
 
 // Config selects the backends and the initial trigger binding.
 type Config struct {
-	// OpenRouterAPIKey unlocks the hosted backends below; both stages share it.
+	// OpenRouterAPIKey unlocks hosted cleanup. Transcription is always local:
+	// the speaker's audio never leaves the machine.
 	OpenRouterAPIKey string
-
-	// Transcription picks the backend: "local" (Parakeet, the default) or
-	// "openrouter" (a hosted speech-to-text model; TranscriptionModel is
-	// optional). Without a usable choice the engine falls back to Parakeet if
-	// downloaded, else the stub (AllowStub) or a placeholder that asks for a
-	// model download.
-	Transcription      string
-	TranscriptionModel string
 
 	// Cleanup picks the backend: "local" (the bundled Qwen server, the default)
 	// or "openrouter" (a hosted chat model; CleanupModel is optional).
@@ -63,11 +56,18 @@ type Config struct {
 	Notify func(kind, msg string)
 }
 
-// job is one piece of audio for the output worker: a whole recording, or one
-// pause-delimited segment of a live one. id ties segments of the same
+// job is one piece of audio for the transcription stage: a whole recording, or
+// one pause-delimited segment of a live one. id ties segments of the same
 // dictation together so cleanup can see what was pasted just before.
 type job struct {
 	wav []byte
+	id  uint64
+}
+
+// textJob is one raw transcript on its way to the cleanup stage, carrying the
+// same dictation id.
+type textJob struct {
+	raw string
 	id  uint64
 }
 
@@ -80,13 +80,12 @@ type Engine struct {
 	onState func(recording bool)
 	events  chan bool
 	jobs    chan job
+	texts   chan textJob
 
-	asrMu       sync.Mutex             // guards the transcriber fields
-	asr         transcribe.Transcriber // active backend
-	baseASR     transcribe.Transcriber // stub or "download a model" placeholder
-	localASR    transcribe.Transcriber // Parakeet, once loaded
-	cloudASR    transcribe.Transcriber // OpenRouter, when a key is set
-	useCloudASR bool
+	asrMu    sync.Mutex             // guards the transcriber fields
+	asr      transcribe.Transcriber // active backend
+	baseASR  transcribe.Transcriber // stub or "download a model" placeholder
+	localASR transcribe.Transcriber // Parakeet, once loaded
 
 	cleanMu       sync.Mutex // guards the cleaner fields and srv
 	clean         cleanup.Cleaner
@@ -106,6 +105,9 @@ type Engine struct {
 	seg        *audio.Segmenter
 	recBuf     []byte                 // streamed audio of a non-live recording (recorder goroutine, then stopCapture)
 	behind     atomic.Bool            // a segment was dropped because the output worker is behind
+	warnedBoot atomic.Bool            // already said cleanup was still starting
+	asrLoading atomic.Bool            // the speech model is being read into memory
+	srvLoading atomic.Bool            // the bundled cleanup server is coming up
 	dictID     atomic.Uint64          // increments per recording
 	notify     func(kind, msg string) // optional UI notifier; set once before Start
 
@@ -136,6 +138,7 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 		onState:  onState,
 		events:   make(chan bool, 16),
 		jobs:     make(chan job, 256),
+		texts:    make(chan textJob, 256),
 		seg:      audio.NewSegmenter(),
 		notify:   cfg.Notify,
 		localURL: cfg.CleanupURL,
@@ -150,24 +153,18 @@ func New(cfg Config, onState func(recording bool)) *Engine {
 
 	// Transcription: the placeholder is the canned stub for console/dev, else
 	// one that reports ErrNoModel so the GUI prompts for a download instead of
-	// pasting fake text. Local Parakeet loads when downloaded and compiled in
-	// (built with -tags parakeet; NewParakeet errors on the stub build).
-	if cfg.AllowStub {
+	// pasting fake text -- or, when the model is downloaded and merely still
+	// being read into memory, one that says so. Parakeet itself is loaded by
+	// Start, in the background (built with -tags parakeet; NewParakeet errors
+	// on the stub build).
+	switch {
+	case cfg.AllowStub:
 		e.baseASR = transcribe.NewStub()
-	} else {
+	case models.Parakeet().Installed():
+		e.baseASR = transcribe.NewLoading()
+	default:
 		e.baseASR = transcribe.NewNeedModel()
 	}
-	if models.Parakeet().Installed() {
-		if dir, err := models.ExtractParakeet(); err == nil {
-			if p, err := transcribe.NewParakeet(dir); err == nil {
-				e.localASR = p
-			}
-		}
-	}
-	if cfg.OpenRouterAPIKey != "" {
-		e.cloudASR = transcribe.NewOpenRouter(cfg.OpenRouterAPIKey, cfg.TranscriptionModel)
-	}
-	e.useCloudASR = cfg.Transcription == "openrouter" && e.cloudASR != nil
 	e.refreshASR()
 
 	// Cleanup: an explicit local URL is used as-is; the bundled server fills
@@ -222,8 +219,11 @@ func (e *Engine) SetNotes(notes string) {
 func (e *Engine) Start() error {
 	overlay.Start()
 	e.maybeStartLocalServer()
+	e.maybeLoadLocalASR()
+	e.emitStatus()
 	go e.run()
-	go e.processLoop()
+	go e.transcribeLoop()
+	go e.cleanLoop()
 	e.warmLocalCleanup()
 	return e.trig.Start(e.onPress, e.onRelease)
 }
@@ -242,18 +242,15 @@ func (e *Engine) transcriber() transcribe.Transcriber {
 	return e.asr
 }
 
-// refreshASR picks the active transcriber from what is configured and loaded:
-// the cloud backend when chosen, else local Parakeet, else the placeholder.
-// The caller holds asrMu.
+// refreshASR picks the active transcriber: local Parakeet once it has loaded,
+// else the placeholder that explains why there is no transcript. The caller
+// holds asrMu.
 func (e *Engine) refreshASR() {
-	switch {
-	case e.useCloudASR && e.cloudASR != nil:
-		e.asr = e.cloudASR
-	case e.localASR != nil:
+	if e.localASR != nil {
 		e.asr = e.localASR
-	default:
-		e.asr = e.baseASR
+		return
 	}
+	e.asr = e.baseASR
 }
 
 // refreshClean picks the active cleaner: the hosted backend when chosen, else
@@ -266,23 +263,17 @@ func (e *Engine) refreshClean() {
 	case e.localClean != nil:
 		e.clean = e.localClean
 	default:
-		e.clean = cleanup.NewNoop()
+		// Nothing wired up yet. When the bundled model is downloaded the
+		// server is merely still coming up, and the next dictation is about to
+		// be pasted uncleaned, so use a cleaner that reports that rather than
+		// degrading in silence. With no model at all, pass-through is exactly
+		// what the user asked for.
+		if models.Qwen().Installed() {
+			e.clean = cleanup.NewStarting()
+		} else {
+			e.clean = cleanup.NewNoop()
+		}
 	}
-}
-
-// SetTranscription switches between local Parakeet ("local") and a hosted
-// speech-to-text model via OpenRouter ("openrouter", with the API key and an
-// optional model) live. An empty key falls back to local.
-func (e *Engine) SetTranscription(kind, apiKey, model string) {
-	e.asrMu.Lock()
-	defer e.asrMu.Unlock()
-	if apiKey != "" {
-		e.cloudASR = transcribe.NewOpenRouter(apiKey, model)
-	} else {
-		e.cloudASR = nil
-	}
-	e.useCloudASR = kind == "openrouter" && e.cloudASR != nil
-	e.refreshASR()
 }
 
 // SetCleanup switches between the bundled local model ("local") and a hosted
@@ -300,6 +291,9 @@ func (e *Engine) SetCleanup(kind, apiKey, model string) {
 	if !cloud {
 		e.maybeStartLocalServer()
 	}
+	// Switching to the hosted backend makes a still-booting local server
+	// irrelevant, and switching back makes it matter again.
+	e.emitStatus()
 }
 
 // SetLive turns paste-as-you-speak on or off. It applies to the next recording.
@@ -326,6 +320,32 @@ func (e *Engine) EnableLocalTranscription() error {
 	e.refreshASR()
 	e.asrMu.Unlock()
 	return nil
+}
+
+// emitStatus tells the UI how far along startup is, as a "status" message:
+// a short phrase while a model is still loading, and empty once dictating
+// will work. Both models load in the background, so without this the app
+// looks ready before it is and the user only finds out by pressing the
+// trigger and being told to wait.
+func (e *Engine) emitStatus() { e.emit("status", e.statusText()) }
+
+// statusText is the phrase for what is still starting, or "" when nothing is.
+// A cleanup server coming up does not count when the hosted backend is the one
+// selected: that path is already usable.
+func (e *Engine) statusText() string {
+	asr := e.asrLoading.Load()
+	e.cleanMu.Lock()
+	clean := e.srvLoading.Load() && !e.useCloudClean
+	e.cleanMu.Unlock()
+	switch {
+	case asr && clean:
+		return "starting up, loading models"
+	case asr:
+		return "starting up, loading the speech model"
+	case clean:
+		return "starting up, loading the cleanup model"
+	}
+	return ""
 }
 
 // emit sends a user-facing message to the UI notifier, if one was set.
@@ -358,6 +378,7 @@ func (e *Engine) setLocalCleanupURL(url string) {
 	}
 	e.refreshClean()
 	e.cleanMu.Unlock()
+	e.warnedBoot.Store(false)
 	e.warmLocalCleanup()
 }
 
@@ -407,12 +428,37 @@ func (e *Engine) maybeStartLocalServer() {
 	if have || !models.Qwen().Installed() {
 		return
 	}
+	e.srvLoading.Store(true)
 	go func() {
+		defer func() {
+			e.srvLoading.Store(false)
+			e.emitStatus()
+		}()
 		if err := e.EnableLocalCleanup(); err != nil {
 			log.Printf("local cleanup server: %v", err)
 			return
 		}
 		log.Printf("local cleanup ready")
+	}()
+}
+
+// maybeLoadLocalASR reads the downloaded Parakeet model into memory in the
+// background and swaps it in when ready. The load takes seconds and Start runs
+// on the GUI's startup path, so doing it inline left the window blank and the
+// trigger dead that whole time. Until it lands, dictating reports ErrLoading.
+func (e *Engine) maybeLoadLocalASR() {
+	if !models.Parakeet().Installed() {
+		return
+	}
+	e.asrLoading.Store(true)
+	go func() {
+		defer func() {
+			e.asrLoading.Store(false)
+			e.emitStatus()
+		}()
+		if err := e.EnableLocalTranscription(); err != nil {
+			log.Printf("local transcription: %v", err)
+		}
 	}()
 }
 
@@ -602,45 +648,66 @@ func (e *Engine) stopCapture() {
 	e.behind.Store(false)
 }
 
-// processLoop is the single ordered output worker: transcribe -> clean -> inject,
-// one piece of audio at a time, so overlapping dictations never corrupt the
-// clipboard. Within one dictation it remembers what was pasted last, so the
-// next segment is cleaned with that context and joined with a space.
-func (e *Engine) processLoop() {
+// transcribeLoop is the first output stage: audio in, raw transcript out, in
+// order. It runs ahead of cleanup instead of waiting for it, so the tail the
+// speaker just released is already being transcribed while the segment before
+// it is still being cleaned. That overlap is most of the wait they feel.
+func (e *Engine) transcribeLoop() {
+	for j := range e.jobs {
+		raw, err := e.transcriber().Transcribe(j.wav)
+		if err != nil {
+			if errors.Is(err, transcribe.ErrNoModel) {
+				e.emit("error", "Download a transcription model to start dictating.")
+			} else if errors.Is(err, transcribe.ErrLoading) {
+				e.emit("info", "Still starting up -- try that again in a moment.")
+			} else {
+				log.Printf("transcribe: %v", err)
+				e.emit("error", "Transcription failed.")
+			}
+			e.addProcessing(-1)
+			continue
+		}
+		if strings.TrimSpace(raw) == "" {
+			e.addProcessing(-1) // silence: nothing to clean
+			continue
+		}
+		e.texts <- textJob{raw: raw, id: j.id}
+	}
+}
+
+// cleanLoop is the second output stage: clean and paste, one transcript at a
+// time and in order, so overlapping dictations never corrupt the clipboard.
+// Within one dictation it remembers what was pasted last, so the next segment
+// is cleaned with that context and joined with a space.
+func (e *Engine) cleanLoop() {
 	var lastID uint64
 	var lastText string
-	for j := range e.jobs {
+	for j := range e.texts {
 		prev := ""
 		if j.id == lastID {
 			prev = lastText
 		}
-		if text := e.process(j.wav, prev); text != "" {
+		if text := e.cleanAndPaste(j.raw, prev); text != "" {
 			lastID, lastText = j.id, text
 		}
 	}
 }
 
-// process runs one piece of audio through the pipeline and returns what it
-// pasted ("" if nothing).
-func (e *Engine) process(wav []byte, prev string) string {
+// cleanAndPaste runs one transcript through cleanup and injects it, returning
+// what it pasted ("" if nothing).
+func (e *Engine) cleanAndPaste(raw, prev string) string {
 	defer e.addProcessing(-1) // clear the blue dot when this job finishes
-	raw, err := e.transcriber().Transcribe(wav)
-	if err != nil {
-		if errors.Is(err, transcribe.ErrNoModel) {
-			e.emit("error", "Download a transcription model to start dictating.")
-		} else {
-			log.Printf("transcribe: %v", err)
-			e.emit("error", "Transcription failed.")
-		}
-		return ""
-	}
-	if strings.TrimSpace(raw) == "" {
-		return "" // silence
-	}
 	text, err := e.cleaner().Clean(raw, prev)
 	if err != nil {
-		log.Printf("cleanup: %v", err)
-		e.emit("info", "Cleanup unavailable; pasted the raw transcript.")
+		if errors.Is(err, cleanup.ErrNotReady) {
+			// Once per startup, not once per segment.
+			if !e.warnedBoot.Swap(true) {
+				e.emit("info", "Cleanup is still starting; pasting raw text for now.")
+			}
+		} else {
+			log.Printf("cleanup: %v", err)
+			e.emit("info", "Cleanup unavailable; pasted the raw transcript.")
+		}
 		text = raw // fall back to the raw transcript rather than dropping it
 	}
 	if text == "" {

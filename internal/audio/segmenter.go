@@ -44,16 +44,22 @@ const (
 	initialFloor = 150.0 // RMS of a quiet room, before any frame has been seen
 )
 
-// NewSegmenter returns a segmenter with defaults tuned for dictation: a cut
-// after a 0.8 s pause, segments of at least 1.5 s, a preference for cutting
-// once past 20 s, and a hard limit of 45 s.
+// NewSegmenter returns a segmenter with defaults tuned for dictation latency.
+//
+// What the speaker feels is the gap between releasing the trigger and the last
+// text landing, and that gap is the leftover tail: whatever has piled up since
+// the previous cut. SoftMax bounds it, so it is deliberately short — past 7 s
+// any ordinary between-phrase gap ends the segment, which puts the expected
+// tail near 3-4 s (well under a second of transcription and cleanup). MinPause
+// is the unhurried case: a clear 0.5 s pause is a phrase boundary whatever the
+// length. HardMax only fires for speech with no gap at all.
 func NewSegmenter() *Segmenter {
 	return &Segmenter{
-		MinPause:   800 * time.Millisecond,
-		MinSegment: 1500 * time.Millisecond,
-		SoftMax:    20 * time.Second,
-		ShortPause: 250 * time.Millisecond,
-		HardMax:    45 * time.Second,
+		MinPause:   500 * time.Millisecond,
+		MinSegment: 1000 * time.Millisecond,
+		SoftMax:    7 * time.Second,
+		ShortPause: 200 * time.Millisecond,
+		HardMax:    20 * time.Second,
 	}
 }
 

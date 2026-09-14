@@ -69,3 +69,40 @@ func TestLLMLive(t *testing.T) {
 	}
 	t.Logf("with notes: %q", got)
 }
+
+// TestLLMLiveMidSentenceStart guards the segmented path. The segmenter cuts at
+// ordinary between-phrase gaps, so a transcript usually BEGINS mid-sentence,
+// carrying the words that finish the thought the previous segment left hanging.
+// Those words belong to the transcript, but the model used to drop them as
+// though they were part of <previous>, silently losing speech.
+func TestLLMLiveMidSentenceStart(t *testing.T) {
+	url := os.Getenv("ZEROTYPE_LLM_TEST")
+	if url == "" {
+		t.Skip("set ZEROTYPE_LLM_TEST to a llama-server base URL")
+	}
+	l := NewLLM(url)
+
+	prev := "second, the export button doesn't do anything at all, and I think the handler is"
+	got, err := l.Clean("never wired up and the third thing is the dark mode toggle resets every time you", prev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(got), "never wired up") {
+		t.Errorf("dropped the words completing the previous sentence: %q", got)
+	}
+	if strings.Contains(strings.ToLower(got), "export button") {
+		t.Errorf("echoed the previous segment back: %q", got)
+	}
+	t.Logf("mid-sentence start: %q", got)
+
+	// The same, in Swedish: the continuation must survive and stay Swedish.
+	got, err = l.Clean("funktionen aldrig är kopplad kan du kolla på det idag",
+		"och den andra är att exportknappen inte gör någonting alls, jag tror att")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(got), "funktionen aldrig är kopplad") {
+		t.Errorf("Swedish continuation lost or translated: %q", got)
+	}
+	t.Logf("mid-sentence start (sv): %q", got)
+}

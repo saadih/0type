@@ -25,6 +25,7 @@ const (
 	wmRButtonUp     = 0x0205
 
 	nimAdd    = 0x00000000
+	nimModify = 0x00000001
 	nimDelete = 0x00000002
 
 	nifMessage = 0x00000001
@@ -120,15 +121,23 @@ var (
 	nid    notifyIconData
 	onOpen func()
 	onQuit func()
-	tip    string
 	ready  = make(chan struct{})
+
+	// tipMu guards tip, nid's tooltip bytes, and live. The icon is created on
+	// the tray's own OS thread, while SetTooltip is called from wherever the
+	// engine happens to finish starting up.
+	tipMu sync.Mutex
+	tip   string
+	live  bool // the icon exists, so a change can be pushed
 )
 
 // Start creates the tray icon on its own OS thread. openFn and quitFn run when
 // the user picks Open (or left-clicks) and Quit. Safe to call once.
 func Start(tooltip string, openFn, quitFn func()) {
 	once.Do(func() {
+		tipMu.Lock()
 		tip = tooltip
+		tipMu.Unlock()
 		onOpen = openFn
 		onQuit = quitFn
 		go run()
@@ -180,10 +189,11 @@ func run() {
 		hIcon:            loadAppIcon(hInst),
 	}
 	nid.cbSize = uint32(unsafe.Sizeof(nid))
-	if u, err := syscall.UTF16FromString(tip); err == nil {
-		copy(nid.szTip[:len(nid.szTip)-1], u)
-	}
+	tipMu.Lock()
+	copyTip(tip)
 	procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
+	live = true
+	tipMu.Unlock()
 
 	close(ready)
 
@@ -197,6 +207,30 @@ func run() {
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	procShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&nid)))
+}
+
+// SetTooltip changes the text shown on hover, so the tray can say the app is
+// still starting up. Safe to call from any goroutine, and before Start: the
+// text is remembered and applied when the icon appears.
+func SetTooltip(s string) {
+	tipMu.Lock()
+	defer tipMu.Unlock()
+	tip = s
+	if !live {
+		return
+	}
+	copyTip(s)
+	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
+// copyTip writes s into the icon's fixed-size tooltip buffer, truncating what
+// does not fit. The caller holds tipMu.
+func copyTip(s string) {
+	var buf [128]uint16
+	if u, err := syscall.UTF16FromString(s); err == nil {
+		copy(buf[:len(buf)-1], u)
+	}
+	nid.szTip = buf
 }
 
 func wndProc(h, message, wParam, lParam uintptr) uintptr {

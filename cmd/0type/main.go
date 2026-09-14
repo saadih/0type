@@ -24,20 +24,16 @@ import (
 
 func main() {
 	cfg := app.Config{
-		OpenRouterAPIKey:   os.Getenv("OPENROUTER_API_KEY"),
-		TranscriptionModel: os.Getenv("OPENROUTER_STT_MODEL"),
-		CleanupModel:       os.Getenv("OPENROUTER_MODEL"),
-		CleanupURL:         os.Getenv("ZEROTYPE_CLEANUP_URL"),
-		Notes:              os.Getenv("ZEROTYPE_NOTES"),
-		Live:               os.Getenv("ZEROTYPE_LIVE") != "0",
-		Binding:            hotkey.DefaultBinding(),
-		AllowStub:          true, // console/dev: canned transcript when no key/model
+		OpenRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
+		CleanupModel:     os.Getenv("OPENROUTER_MODEL"),
+		CleanupURL:       os.Getenv("ZEROTYPE_CLEANUP_URL"),
+		Notes:            os.Getenv("ZEROTYPE_NOTES"),
+		Live:             os.Getenv("ZEROTYPE_LIVE") != "0",
+		Binding:          hotkey.DefaultBinding(),
+		AllowStub:        true, // console/dev: canned transcript when no key/model
 	}
-	if cfg.OpenRouterAPIKey != "" {
-		cfg.Transcription = "openrouter"
-		if cfg.CleanupURL == "" { // an explicit local server wins over the cloud
-			cfg.Cleanup = "openrouter"
-		}
+	if cfg.OpenRouterAPIKey != "" && cfg.CleanupURL == "" {
+		cfg.Cleanup = "openrouter" // an explicit local server wins over the cloud
 	}
 	engine := app.New(cfg, func(recording bool) {
 		if recording {
@@ -46,7 +42,7 @@ func main() {
 	})
 
 	fmt.Println("0type - focus a text field, hold the mouse back button (MB4), speak, release. Ctrl+C to quit.")
-	fmt.Println("(set OPENROUTER_API_KEY for cloud transcription; without it and without Parakeet, a stub transcript is used)")
+	fmt.Println("(transcription is always local Parakeet; without it, a stub transcript is used)")
 	if err := engine.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "hotkey:", err)
 		os.Exit(1)

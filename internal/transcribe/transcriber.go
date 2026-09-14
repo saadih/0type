@@ -1,24 +1,21 @@
 // Package transcribe turns captured audio into a raw text transcript.
 //
 // Transcribers accept a complete WAV file (16 kHz mono 16-bit PCM in a RIFF
-// container), the format the Recorder produces. Local Parakeet (sherpa-onnx)
-// is the default backend; OpenRouter's hosted speech-to-text models are the
-// cloud alternative, behind the same interface.
+// container), the format the Recorder produces. Local Parakeet (sherpa-onnx) is
+// the only real backend: audio never leaves the machine. The rest are
+// placeholders reporting why no transcript is coming yet.
 package transcribe
 
-import (
-	"errors"
-	"os"
-)
+import "errors"
 
 // Transcriber converts WAV audio into a raw transcript.
 type Transcriber interface {
 	Transcribe(wav []byte) (string, error)
 }
 
-// ErrNoModel means no transcription backend is available: no local model
-// downloaded and no cloud key. The engine turns it into a "download a model"
-// notice instead of pasting anything.
+// ErrNoModel means no transcription backend is available: the local model has
+// not been downloaded. The engine turns it into a "download a model" notice
+// instead of pasting anything.
 var ErrNoModel = errors.New("no transcription model installed")
 
 // NeedModel is the GUI's placeholder when nothing is ready. It transcribes
@@ -32,15 +29,25 @@ func NewNeedModel() *NeedModel { return &NeedModel{} }
 // Transcribe always returns ErrNoModel.
 func (n *NeedModel) Transcribe(wav []byte) (string, error) { return "", ErrNoModel }
 
-// Default returns OpenRouter when OPENROUTER_API_KEY is set, otherwise the
-// stub. The key is only ever read from the environment, never hardcoded or
-// committed.
-func Default() Transcriber {
-	if key := os.Getenv("OPENROUTER_API_KEY"); key != "" {
-		return NewOpenRouter(key, os.Getenv("OPENROUTER_STT_MODEL"))
-	}
-	return NewStub()
-}
+// ErrLoading means a local model is installed but still being read into
+// memory. Loading it takes seconds, so the engine reports this as "starting
+// up" rather than the "download a model" prompt ErrNoModel triggers, which
+// would be both wrong and alarming.
+var ErrLoading = errors.New("transcription model still loading")
+
+// Loading is the placeholder while a downloaded model is being loaded in the
+// background. It transcribes nothing and reports ErrLoading.
+type Loading struct{}
+
+// NewLoading returns a transcriber that always reports ErrLoading.
+func NewLoading() *Loading { return &Loading{} }
+
+// Transcribe always returns ErrLoading.
+func (l *Loading) Transcribe(wav []byte) (string, error) { return "", ErrLoading }
+
+// Default returns the canned stub, for console and dev builds. Real
+// transcription is local Parakeet, wired up by the engine.
+func Default() Transcriber { return NewStub() }
 
 // Stub returns a fixed placeholder transcript so downstream stages have
 // something realistic (filler + spoken punctuation) to work on.

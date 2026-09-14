@@ -73,11 +73,35 @@ func TestSegmenterNoCutWhileTalking(t *testing.T) {
 }
 
 func TestSegmenterHardMax(t *testing.T) {
+	// Speech with no gap at all has no pause to cut at, so HardMax alone
+	// bounds a segment. Derived from the setting so a retune moves both.
 	s := NewSegmenter()
+	const total = 100 * time.Second
+	want := int(total / s.HardMax)
 	n := 0
-	feed(s, tone(100*time.Second, 6000), BytesPerSecond/4, func([]byte) { n++ })
-	if n != 2 {
-		t.Fatalf("got %d hard cuts in 100 s, want 2", n)
+	feed(s, tone(total, 6000), BytesPerSecond/4, func([]byte) { n++ })
+	if n != want {
+		t.Fatalf("got %d hard cuts in %v, want %d", n, total, want)
+	}
+}
+
+// TestSegmenterBoundsTail is the latency guarantee. What the speaker waits for
+// after letting go is the tail: the audio piled up since the last cut. Ordinary
+// speech — phrases with the short gaps any speaker leaves between them — must
+// keep that tail small, not carry the whole dictation to the end.
+func TestSegmenterBoundsTail(t *testing.T) {
+	s := NewSegmenter()
+	var stream []byte
+	for i := 0; i < 12; i++ { // 12 x (2.5 s phrase + 0.25 s gap) = 33 s
+		stream = append(stream, tone(2500*time.Millisecond, 4000)...)
+		stream = append(stream, silence(250*time.Millisecond)...)
+	}
+	feed(s, stream, BytesPerSecond/4, func([]byte) {})
+	tail := time.Duration(len(s.Tail())) * time.Second / BytesPerSecond
+	// One more phrase can start before the gap that finally cuts, so allow
+	// SoftMax plus a phrase rather than SoftMax exactly.
+	if want := s.SoftMax + 2*time.Second; tail > want {
+		t.Fatalf("tail %v waiting at release, want <= %v", tail, want)
 	}
 }
 
