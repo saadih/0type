@@ -89,16 +89,37 @@ Get-ChildItem $modwin.FullName -Recurse -Filter *.dll |
     Where-Object { $_.FullName -match 'x86_64' } |
     ForEach-Object { Copy-Item $_.FullName $bin -Force }
 
+# The bindings step compiles a throwaway binary and RUNS it, and with -tags
+# parakeet that binary loads the sherpa DLLs. It runs from a temp directory, so
+# the staged copies have to be reachable on PATH or it dies with 0xc0000135.
+$env:PATH = "$bin;$env:PATH"
+
 # Build the exe, and let Wails fill in wails_tools.nsh and fetch the WebView2
 # bootstrapper. Its own makensis pass (admin scope) succeeds because the DLLs are
 # already staged; the next step overrides it with a per-user installer.
 $env:CGO_ENABLED = "1"
 Write-Host "Building exe + processing NSIS templates (wails build -nsis)..."
+$exe = Join-Path $bin "0type.exe"
+if (Test-Path $exe) { Remove-Item $exe -Force }  # never package a stale build
 Push-Location $root
 wails build -tags parakeet -nsis
+$buildFailed = ($LASTEXITCODE -ne 0)
 Pop-Location
+if ($buildFailed) { Write-Error "wails build failed (exit $LASTEXITCODE)."; exit 1 }
+if (-not (Test-Path $exe)) { Write-Error "wails build produced no exe."; exit 1 }
+
+# v0.3.0 shipped without local transcription because the build failed, the
+# failure went unnoticed, and makensis packaged a leftover CGO-free exe. The
+# Parakeet build load-time links sherpa, so its import table names the DLL;
+# a stub build does not. Check rather than trust.
+$ascii = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe))
+if (-not $ascii.Contains("sherpa-onnx-c-api.dll")) {
+    Write-Error "Built exe does not link sherpa-onnx: this is not a Parakeet build, so local transcription would be dead. Refusing to package it."
+    exit 1
+}
+Write-Host "Verified: exe links sherpa-onnx (Parakeet build)."
 # Sign before makensis bundles it, so the portable zip carries a signed exe too.
-Invoke-Sign (Join-Path $bin "0type.exe")
+Invoke-Sign $exe
 
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
 if (-not (Test-Path $makensis)) {
