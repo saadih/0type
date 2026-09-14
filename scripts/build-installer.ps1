@@ -8,10 +8,71 @@
 #   winget install BrechtSanders.WinLibs.POSIX.UCRT
 #   winget install NSIS.NSIS
 #
-#   pwsh scripts/build-installer.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
+#
+# Code signing is optional here but strongly recommended. An unsigned
+# installer with no download history is what Defender objects to: v0.3.0 was
+# flagged Trojan:Win32/Sabsik.FL.A!ml while v0.2.0, built the same way but with
+# weeks of downloads behind it, passed. 0type also looks like a keylogger to a
+# classifier -- global input hook, synthetic keystrokes, clipboard, microphone,
+# and it downloads and runs llama-server -- so this recurs every release until
+# the binaries are signed.
+#
+# Set ONE of these to sign the exe and the installer. With none set the build
+# runs exactly as before and ends with a reminder.
+#   $env:ZEROTYPE_SIGN_SHA1 = "<thumbprint>"   a cert in the current user store
+#   $env:ZEROTYPE_SIGN_PFX  = "path\to.pfx"    a PFX, with ZEROTYPE_SIGN_PASS
+#   $env:ZEROTYPE_SIGN_DLIB = "<dll path>"     Azure Trusted Signing, with
+#   $env:ZEROTYPE_SIGN_META = "metadata.json"  its metadata file
+# ZEROTYPE_SIGN_TS overrides the RFC 3161 timestamp server.
+#
+# SignPath's free tier for open-source projects signs in CI instead: its GitHub
+# Action uploads the artifact and returns a signed one.
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $bin = Join-Path $root "build\bin"
+
+$timestampUrl = $env:ZEROTYPE_SIGN_TS
+if (-not $timestampUrl) { $timestampUrl = "http://timestamp.digicert.com" }
+
+$signArgs = $null
+if ($env:ZEROTYPE_SIGN_SHA1) {
+    $signArgs = @("/sha1", $env:ZEROTYPE_SIGN_SHA1)
+} elseif ($env:ZEROTYPE_SIGN_PFX) {
+    $signArgs = @("/f", $env:ZEROTYPE_SIGN_PFX)
+    if ($env:ZEROTYPE_SIGN_PASS) { $signArgs += @("/p", $env:ZEROTYPE_SIGN_PASS) }
+} elseif ($env:ZEROTYPE_SIGN_DLIB) {
+    if (-not $env:ZEROTYPE_SIGN_META) { Write-Error "ZEROTYPE_SIGN_DLIB needs ZEROTYPE_SIGN_META as well."; exit 1 }
+    $signArgs = @("/dlib", $env:ZEROTYPE_SIGN_DLIB, "/dmdf", $env:ZEROTYPE_SIGN_META)
+}
+# Always timestamp: without it, signatures stop validating when the cert expires.
+if ($signArgs) { $signArgs += @("/fd", "sha256", "/tr", $timestampUrl, "/td", "sha256") }
+
+function Get-SignTool {
+    $c = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    if (Test-Path $kits) {
+        $hit = Get-ChildItem $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\' } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+    return $null
+}
+
+# Invoke-Sign signs one file, or does nothing when signing is not configured.
+# The exe is signed before makensis bundles it and the installer afterwards, so
+# whichever artifact a user takes -- installer or portable zip -- is signed.
+function Invoke-Sign {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not $signArgs) { return }
+    $tool = Get-SignTool
+    if (-not $tool) { Write-Error "signtool.exe not found. Install the Windows SDK signing tools."; exit 1 }
+    Write-Host "Signing $(Split-Path $Path -Leaf)..."
+    & $tool sign @signArgs $Path
+    if ($LASTEXITCODE -ne 0) { Write-Error "signtool failed on $Path."; exit 1 }
+}
 
 if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) {
     Write-Error "gcc not found on PATH. Install WinLibs (winget install BrechtSanders.WinLibs.POSIX.UCRT) and reopen the terminal."
@@ -36,6 +97,8 @@ Write-Host "Building exe + processing NSIS templates (wails build -nsis)..."
 Push-Location $root
 wails build -tags parakeet -nsis
 Pop-Location
+# Sign before makensis bundles it, so the portable zip carries a signed exe too.
+Invoke-Sign (Join-Path $bin "0type.exe")
 
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
 if (-not (Test-Path $makensis)) {
@@ -51,5 +114,9 @@ Write-Host "Building per-user installer..."
     "/DWAILS_INSTALL_SCOPE=user" `
     "$root\build\windows\installer\project.nsi"
 if ($LASTEXITCODE -ne 0) { Write-Error "makensis failed."; exit 1 }
+Invoke-Sign (Join-Path $bin "0type-amd64-installer.exe")
 
 Write-Host "Done: build\bin\0type-amd64-installer.exe (per-user, no admin)."
+if (-not $signArgs) {
+    Write-Warning "Unsigned build: expect a SmartScreen warning, and Defender may flag the fresh installer until it has download history. See this script header for how to sign."
+}
